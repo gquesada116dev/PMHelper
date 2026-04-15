@@ -748,13 +748,8 @@ textarea{resize:vertical;min-height:70px}
 
 // ─── Shared UI ────────────────────────────────────────────────────────────────
 function Modal({ title, wide, onClose, children, footer }) {
-  useEffect(() => {
-    const fn = e => e.key === "Escape" && onClose();
-    window.addEventListener("keydown", fn);
-    return () => window.removeEventListener("keydown", fn);
-  }, [onClose]);
   return (
-    <div className="modal-ov" onClick={e => e.target === e.currentTarget && onClose()}>
+    <div className="modal-ov">
       <div className={`modal${wide ? " modal-wide" : ""}`}>
         <div className="modal-hd">
           <h3>{title}</h3>
@@ -863,6 +858,7 @@ export default function App() {
     "d-overview": <DiscoveryOverview project={project} update={update} setSection={setSection} />,
     "d-meetings": <DiscoveryMeetingPrep project={project} update={update} />,
     "d-sessions": <DiscoverySessions project={project} update={update} />,
+    "d-insights": <DiscoveryInsights project={project} update={update} />,
     "d-docs": <DiscoveryDocuments project={project} update={update} />,
     "d-todos": <DiscoveryTodos project={project} update={update} />,
     "d-stakeholders": <DiscoveryStakeholders project={project} update={update} />,
@@ -870,6 +866,7 @@ export default function App() {
     "d-storymap": <StoryMappingSection project={project} update={update} />,
     "d-planning": <DiscoveryPlanning project={project} update={update} />,
     "d-design": <DiscoveryDesign project={project} update={update} />,
+    "d-wireframes": <WireframePrototype project={project} update={update} storageKey="wireframe" />,
     "d-team": <TeamEstimation project={project} update={update} />,
     "d-presentation": <DiscoveryPresentation project={project} update={update}
       onGraduate={() => setShowGraduation(true)} />,
@@ -944,12 +941,14 @@ function Sidebar({ projects, pid, setPid, section, setSection, onNew, jiraConnec
     { id: "d-overview", label: "Overview", Icon: Compass, section: null },
     { id: "d-meetings", label: "Meeting Prep", Icon: ClipboardList, section: "DISCOVERY" },
     { id: "d-sessions", label: "Sessions & Outputs", Icon: FileText, section: null },
+    { id: "d-insights", label: "Insights", Icon: Lightbulb, section: null },
     { id: "d-docs", label: "Research Docs", Icon: Upload, section: null },
     { id: "d-todos", label: "To Do", Icon: CheckCircle2, section: null },
     { id: "d-stakeholders", label: "Stakeholders", Icon: Users, section: null },
     { id: "d-storymap", label: "Story Mapping", Icon: Map, section: "MAPPING" },
     { id: "d-planning", label: "Tech Planning", Icon: Cpu, section: "PLANNING" },
     { id: "d-design", label: "Design Planning", Icon: Palette, section: null },
+    { id: "d-wireframes", label: "Prototype", Icon: Layers, section: null },
     { id: "d-team", label: "Team & Estimation", Icon: BarChart2, section: "DELIVERY" },
     { id: "d-presentation", label: "Client Presentation", Icon: Presentation, section: null },
     { id: "d-ai", label: "AI Colleague", Icon: Bot, section: null },
@@ -2398,6 +2397,7 @@ Generate immediately from a clear description. Only ask ONE short question if so
 
 // ─── Design Tasks ─────────────────────────────────────────────────────────────
 function DesignSection({ project, update }) {
+  const [tab, setTab] = useState("tasks");
   const [modal, setModal] = useState(null);
   const blank = { title: "", epicId: project.epics[0]?.id || "", desc: "", objective: "", scenarios: "", deliverables: "", links: "" };
   const [form, setForm] = useState(blank);
@@ -2452,10 +2452,29 @@ Generate immediately from a good description. Only ask ONE question if truly unc
   return (
     <div>
       <div className="sec-head">
-        <div><div className="sec-title">Design Tasks</div><div className="sec-sub">{project.design.length} task{project.design.length !== 1 ? "s" : ""}</div></div>
-        <button className="btn btn-primary" onClick={() => { setForm(blank); setConvo([]); setConvoInput(""); setConvoStep("idle"); setModal("ai"); }}><Plus size={13} /> New Design Task</button>
+        <div>
+          <div className="sec-title">Design</div>
+          <div className="sec-sub">{tab === "tasks" ? `${project.design.length} task${project.design.length !== 1 ? "s" : ""}` : "Lo-fi interactive prototype"}</div>
+        </div>
+        {tab === "tasks" && (
+          <button className="btn btn-primary" onClick={() => { setForm(blank); setConvo([]); setConvoInput(""); setConvoStep("idle"); setModal("ai"); }}><Plus size={13} /> New Design Task</button>
+        )}
       </div>
 
+      {/* Tab bar */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+        {[["tasks", "Tasks"], ["prototype", "Prototype"]].map(([v, lbl]) => (
+          <button key={v} onClick={() => setTab(v)}
+            style={{ padding: "6px 18px", borderRadius: 20, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, transition: "all .15s",
+              background: tab === v ? "#172b4d" : "#f1f2f4", color: tab === v ? "#fff" : "#505f79" }}>
+            {lbl}
+          </button>
+        ))}
+      </div>
+
+      {tab === "prototype" && <WireframePrototype project={project} update={update} storageKey="wireframe" />}
+
+      {tab === "tasks" && (<>
       {project.design.length === 0 ? (
         <Empty icon={<Palette size={36} />} title="No design tasks" sub="Describe what you need — AI generates a concise brief for the design team"
           action={<button className="btn btn-primary" onClick={() => { setForm(blank); setConvo([]); setConvoInput(""); setConvoStep("idle"); setModal("ai"); }}><Plus size={13} /> New Design Task</button>} />
@@ -2470,7 +2489,7 @@ Generate immediately from a good description. Only ask ONE question if truly unc
             <button className="icon-btn" onClick={() => del(d.id)}><Trash2 size={13} /></button>
           </div>
         ))
-      )}
+      )}</>)
 
       {/* AI chat creation */}
       {modal === "ai" && (
@@ -4098,6 +4117,8 @@ function DiscoveryMeetingPrep({ project, update }) {
   const [editTitle, setEditTitle] = useState("");
   const [wrapUp, setWrapUp] = useState(null); // agenda being wrapped up
   const [wrapForm, setWrapForm] = useState({ participants: "", notes: "", date: new Date().toISOString().split("T")[0] });
+  const [wrapStep, setWrapStep] = useState("notes"); // "notes" | "checking" | "followup" | "logging"
+  const [followUpQs, setFollowUpQs] = useState([]); // [{question, answer}]
   const [wrapping, setWrapping] = useState(false);
 
   const agendas = project.agendas || [];
@@ -4168,27 +4189,81 @@ function DiscoveryMeetingPrep({ project, update }) {
   const openWrapUp = (agenda) => {
     setWrapUp(agenda);
     setWrapForm({ participants: "", notes: "", date: new Date().toISOString().split("T")[0] });
+    setWrapStep("notes");
+    setFollowUpQs([]);
   };
 
-  const confirmWrapUp = async () => {
-    if (!wrapForm.notes.trim() && !window.confirm("No notes added. Log session anyway?")) return;
-    setWrapping(true);
+  const doLog = async (extraNotes = "") => {
+    setWrapStep("logging");
+    const finalNotes = extraNotes
+      ? wrapForm.notes.trim() + "\n\n" + extraNotes
+      : wrapForm.notes.trim();
     const session = {
       id: uid(),
       title: wrapUp.title,
       date: wrapForm.date,
       participants: wrapForm.participants,
-      notes: wrapForm.notes,
+      notes: finalNotes,
       agendaId: wrapUp.id,
       outputs: null,
     };
     const updatedAgendas = agendas.map(a => a.id === wrapUp.id ? { ...a, wrappedUp: true, sessionId: session.id } : a);
-    update({
-      agendas: updatedAgendas,
-      sessions: [...(project.sessions || []), session],
-    });
-    setWrapping(false);
+    update({ agendas: updatedAgendas, sessions: [...(project.sessions || []), session] });
     setWrapUp(null);
+    setWrapStep("notes");
+  };
+
+  const confirmWrapUp = async () => {
+    const notes = wrapForm.notes.trim();
+    if (!notes && !window.confirm("No notes added. Log session anyway?")) return;
+
+    // Notes are detailed enough — skip the follow-up check
+    if (notes.length > 600) { doLog(); return; }
+
+    // Ask Claude if follow-up questions are needed
+    setWrapStep("checking");
+    const agendaSnippet = (wrapUp.content || "").slice(0, 800);
+    const reply = await askClaude([{
+      role: "user",
+      content: `You are reviewing notes from a product discovery meeting.
+
+AGENDA:
+${agendaSnippet}
+
+NOTES WRITTEN SO FAR:
+${notes || "(none)"}
+
+PARTICIPANTS: ${wrapForm.participants || "not specified"}
+PROJECT: ${project.name} — ${project.about || ""}
+
+Assess whether the notes capture enough context for this meeting type. Look for:
+- What was actually decided or concluded
+- Key blockers, risks, or open questions that came up
+- Reactions from the client or stakeholders
+- Anything unexpected that happened
+
+If the notes are already sufficient, return: {"needsMore": false}
+If important context is missing, return 1-2 SHORT, specific follow-up questions (not generic):
+{"needsMore": true, "questions": ["Specific question 1?", "Specific question 2?"]}
+
+Return ONLY valid JSON.`,
+    }],
+      "You are a discovery facilitator reviewing meeting notes. Return only valid JSON.", 400);
+
+    const parsed = parseJSON(reply);
+    if (!parsed || !parsed.needsMore || !parsed.questions?.length) {
+      doLog(); return;
+    }
+    setFollowUpQs(parsed.questions.map(q => ({ question: q, answer: "" })));
+    setWrapStep("followup");
+  };
+
+  const logWithAnswers = () => {
+    const answered = followUpQs.filter(q => q.answer.trim());
+    const extra = answered.length
+      ? "Follow-up:\n" + answered.map(q => `Q: ${q.question}\nA: ${q.answer}`).join("\n\n")
+      : "";
+    doLog(extra);
   };
 
   return (
@@ -4295,31 +4370,76 @@ function DiscoveryMeetingPrep({ project, update }) {
 
       {/* Wrap Up modal */}
       {wrapUp && (
-        <Modal title={`Wrap Up — ${wrapUp.title}`} onClose={() => setWrapUp(null)}
+        <Modal title={`Wrap Up — ${wrapUp.title}`} onClose={() => { setWrapUp(null); setWrapStep("notes"); }}
           footer={
-            <><button className="btn btn-ghost" onClick={() => setWrapUp(null)}>Cancel</button>
-              <button className="btn btn-primary" onClick={confirmWrapUp} disabled={wrapping}>
-                <CheckCircle2 size={13} /> {wrapping ? "Logging…" : "Log Session"}
-              </button></>
+            wrapStep === "notes" ? (
+              <><button className="btn btn-ghost" onClick={() => { setWrapUp(null); setWrapStep("notes"); }}>Cancel</button>
+                <button className="btn btn-primary" onClick={confirmWrapUp}>
+                  <CheckCircle2 size={13} /> Log Session
+                </button></>
+            ) : wrapStep === "checking" ? (
+              <button className="btn btn-ghost" disabled style={{ opacity: .5 }}>Reviewing notes…</button>
+            ) : wrapStep === "followup" ? (
+              <><button className="btn btn-ghost" onClick={() => doLog()}>Skip & Log</button>
+                <button className="btn btn-primary" onClick={logWithAnswers}>
+                  <CheckCircle2 size={13} /> Log Session
+                </button></>
+            ) : (
+              <button className="btn btn-ghost" disabled style={{ opacity: .5 }}>Logging…</button>
+            )
           }>
-          <p style={{ fontSize: 13, color: "#6b778c", lineHeight: 1.65, marginBottom: 16 }}>
-            This will create a session log in <strong>Sessions & Outputs</strong> linked to this agenda. Add your notes from the meeting below.
-          </p>
-          <div className="row">
-            <div className="field">
-              <label>Date</label>
-              <input type="date" value={wrapForm.date} onChange={e => setWrapForm(f => ({ ...f, date: e.target.value }))} />
+
+          {/* Step: notes */}
+          {(wrapStep === "notes" || wrapStep === "checking") && (<>
+            <p style={{ fontSize: 13, color: "#6b778c", lineHeight: 1.65, marginBottom: 16 }}>
+              This will create a session log in <strong>Sessions & Outputs</strong> linked to this agenda. Add your notes from the meeting below.
+            </p>
+            <div className="row">
+              <div className="field">
+                <label>Date</label>
+                <input type="date" value={wrapForm.date} onChange={e => setWrapForm(f => ({ ...f, date: e.target.value }))} />
+              </div>
+              <div className="field">
+                <label>Participants</label>
+                <input value={wrapForm.participants} onChange={e => setWrapForm(f => ({ ...f, participants: e.target.value }))} placeholder="e.g. PM, CTO, Design Lead" />
+              </div>
             </div>
             <div className="field">
-              <label>Participants</label>
-              <input value={wrapForm.participants} onChange={e => setWrapForm(f => ({ ...f, participants: e.target.value }))} placeholder="e.g. PM, CTO, Design Lead" />
+              <label>Session Notes</label>
+              <textarea value={wrapForm.notes} onChange={e => setWrapForm(f => ({ ...f, notes: e.target.value }))}
+                placeholder="Paste or type what happened in the meeting — decisions made, things discussed, surprises. AI will extract outputs later." rows={7}
+                disabled={wrapStep === "checking"} />
             </div>
-          </div>
-          <div className="field">
-            <label>Session Notes</label>
-            <textarea value={wrapForm.notes} onChange={e => setWrapForm(f => ({ ...f, notes: e.target.value }))}
-              placeholder="Paste or type what happened in the meeting — decisions made, things discussed, surprises. AI will extract outputs later." rows={7} />
-          </div>
+            {wrapStep === "checking" && (
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8, color: "#6b778c", fontSize: 13 }}>
+                <div className="ai-typing" style={{ display: "inline-flex" }}><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div>
+                Reviewing your notes for gaps…
+              </div>
+            )}
+          </>)}
+
+          {/* Step: follow-up questions */}
+          {wrapStep === "followup" && (<>
+            <div style={{ background: "#f8f9fa", border: "1px solid #dfe1e6", borderRadius: 8, padding: "12px 14px", marginBottom: 18 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: "#172b4d", marginBottom: 4 }}>Your notes look a bit light</div>
+              <div style={{ fontSize: 12, color: "#6b778c" }}>Answer what you can — anything helps. You can skip questions by leaving them blank.</div>
+            </div>
+            {followUpQs.map((q, i) => (
+              <div key={i} className="field" style={{ marginBottom: 16 }}>
+                <label style={{ fontSize: 13, fontWeight: 600, color: "#172b4d" }}>{q.question}</label>
+                <textarea value={q.answer} rows={3}
+                  onChange={e => setFollowUpQs(qs => qs.map((x, j) => j === i ? { ...x, answer: e.target.value } : x))}
+                  placeholder="Optional — leave blank to skip" autoFocus={i === 0} />
+              </div>
+            ))}
+          </>)}
+
+          {wrapStep === "logging" && (
+            <div style={{ padding: "32px 0", textAlign: "center", color: "#6b778c", fontSize: 13 }}>
+              <div className="ai-typing" style={{ display: "inline-flex", marginBottom: 10 }}><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div>
+              <div>Logging session…</div>
+            </div>
+          )}
         </Modal>
       )}
     </div>
@@ -4333,6 +4453,8 @@ function DiscoverySessions({ project, update }) {
   const [extracting, setExtracting] = useState(null);
   const [shareSession, setShareSession] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [openList, setOpenList] = useState(null); // "risks" | "opportunities" | "assumptions" | "flows"
+  const [editingItem, setEditingItem] = useState(null); // { type, id, text }
   const sessions = project.sessions || [];
 
   const saveSession = () => {
@@ -4402,12 +4524,12 @@ function DiscoverySessions({ project, update }) {
 
       <div className="two-col" style={{ marginBottom: 20 }}>
         {[
-          { label: "Risks", items: outputs.risks, color: "#de350b", bg: "#ffebe6" },
-          { label: "Opportunities", items: outputs.opportunities, color: "#00632b", bg: "#e3fcef" },
-          { label: "Assumptions", items: outputs.assumptions, color: "#7a5c00", bg: "#fff8e1" },
-          { label: "Flows Mapped", items: outputs.flows, color: "#0052cc", bg: "#e6f0ff" },
-        ].map(({ label, items, color, bg }) => (
-          <div key={label} className="card" style={{ padding: "14px 16px" }}>
+          { label: "Risks", key: "risks", items: outputs.risks, color: "#de350b", bg: "#ffebe6" },
+          { label: "Opportunities", key: "opportunities", items: outputs.opportunities, color: "#00632b", bg: "#e3fcef" },
+          { label: "Assumptions", key: "assumptions", items: outputs.assumptions, color: "#7a5c00", bg: "#fff8e1" },
+          { label: "Flows Mapped", key: "flows", items: outputs.flows, color: "#0052cc", bg: "#e6f0ff" },
+        ].map(({ label, key, items, color, bg }) => (
+          <div key={label} className="card" style={{ padding: "14px 16px", cursor: "pointer" }} onClick={() => setOpenList(key)}>
             <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
               <span style={{ fontSize: 11, fontWeight: 700, color, fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em" }}>{label}</span>
               <span style={{ fontSize: 12, fontWeight: 700, color, background: bg, padding: "1px 8px", borderRadius: 4 }}>{items.length}</span>
@@ -4418,9 +4540,103 @@ function DiscoverySessions({ project, update }) {
               </div>
             ))}
             {items.length > 3 && <div style={{ fontSize: 11, color: "#97a0af", marginTop: 4 }}>+{items.length - 3} more</div>}
+            {items.length === 0 && <div style={{ fontSize: 11, color: "#97a0af" }}>None yet — click to add</div>}
           </div>
         ))}
       </div>
+
+      {openList && (() => {
+        const listMeta = {
+          risks: { label: "Risks", color: "#de350b", bg: "#ffebe6" },
+          opportunities: { label: "Opportunities", color: "#00632b", bg: "#e3fcef" },
+          assumptions: { label: "Assumptions", color: "#7a5c00", bg: "#fff8e1" },
+          flows: { label: "Flows Mapped", color: "#0052cc", bg: "#e6f0ff" },
+        }[openList];
+        const rawItems = project[openList] || [];
+        // normalise: risks/opportunities are {id,text,source}, assumptions/flows are strings
+        const isObj = openList === "risks" || openList === "opportunities";
+        const items = rawItems.map(i => isObj
+          ? (typeof i === "string" ? { id: uid(), text: i, source: "" } : i)
+          : i
+        );
+
+        const saveItems = (updated) => update({ [openList]: updated });
+
+        const deleteItem = (idx) => {
+          if (!window.confirm("Delete this item?")) return;
+          const updated = items.filter((_, i) => i !== idx);
+          saveItems(updated);
+        };
+
+        const startEdit = (idx) => {
+          const item = items[idx];
+          setEditingItem({ idx, text: isObj ? item.text : item, source: isObj ? (item.source || "") : "" });
+        };
+
+        const saveEdit = () => {
+          if (!editingItem) return;
+          const updated = items.map((item, i) => {
+            if (i !== editingItem.idx) return item;
+            return isObj ? { ...item, text: editingItem.text, source: editingItem.source } : editingItem.text;
+          });
+          saveItems(updated);
+          setEditingItem(null);
+        };
+
+        const addNew = () => {
+          const updated = isObj
+            ? [...items, { id: uid(), text: "New item", source: "" }]
+            : [...items, "New item"];
+          saveItems(updated);
+          setEditingItem({ idx: updated.length - 1, text: "New item", source: "" });
+        };
+
+        return (
+          <Modal wide title={listMeta.label} onClose={() => { setOpenList(null); setEditingItem(null); }}
+            footer={
+              <><button className="btn btn-ghost" onClick={addNew}><Plus size={13} /> Add</button>
+                <button className="btn btn-primary" onClick={() => { setOpenList(null); setEditingItem(null); }}>Done</button></>
+            }>
+            {items.length === 0 && <div style={{ color: "#97a0af", fontSize: 13, textAlign: "center", padding: "24px 0" }}>No items yet. Click Add to create one.</div>}
+            {items.map((item, idx) => {
+              const text = isObj ? item.text : item;
+              const source = isObj ? (item.source || "") : "";
+              const isEditing = editingItem?.idx === idx;
+              return (
+                <div key={idx} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 0", borderBottom: "1px solid #f1f2f4" }}>
+                  <div style={{ flex: 1 }}>
+                    {isEditing ? (
+                      <>
+                        <textarea value={editingItem.text} onChange={e => setEditingItem(ei => ({ ...ei, text: e.target.value }))}
+                          rows={2} style={{ width: "100%", fontSize: 13, padding: "6px 8px", border: "1px solid #c1c7d0", borderRadius: 4, resize: "vertical" }} autoFocus />
+                        {isObj && (
+                          <input value={editingItem.source} onChange={e => setEditingItem(ei => ({ ...ei, source: e.target.value }))}
+                            placeholder="Source (optional)" style={{ width: "100%", fontSize: 12, padding: "4px 8px", border: "1px solid #c1c7d0", borderRadius: 4, marginTop: 4 }} />
+                        )}
+                        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                          <button className="btn btn-primary btn-sm" onClick={saveEdit}>Save</button>
+                          <button className="btn btn-ghost btn-sm" onClick={() => setEditingItem(null)}>Cancel</button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div style={{ fontSize: 13, color: "#172b4d", lineHeight: 1.5 }}>{text}</div>
+                        {source && <div style={{ fontSize: 11, color: "#97a0af", marginTop: 2 }}>Source: {source}</div>}
+                      </>
+                    )}
+                  </div>
+                  {!isEditing && (
+                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                      <button className="icon-btn" onClick={() => startEdit(idx)} title="Edit"><Edit2 size={13} /></button>
+                      <button className="icon-btn" onClick={() => deleteItem(idx)} title="Delete"><Trash2 size={13} /></button>
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </Modal>
+        );
+      })()}
 
       {sessions.length === 0 ? (
         <Empty icon={<FileText size={36} />} title="No sessions logged yet" sub="Log your first discovery session and let AI extract the key insights"
@@ -4496,6 +4712,178 @@ function DiscoverySessions({ project, update }) {
   );
 }
 
+// ─── Discovery Insights ───────────────────────────────────────────────────────
+function DiscoveryInsights({ project, update }) {
+  const [activeTab, setActiveTab] = useState("risks");
+  const [editingIdx, setEditingIdx] = useState(null);
+  const [editText, setEditText] = useState("");
+  const [editSource, setEditSource] = useState("");
+  const [addingText, setAddingText] = useState("");
+  const [addingSource, setAddingSource] = useState("");
+  const [showAdd, setShowAdd] = useState(false);
+
+  const TABS = [
+    { key: "risks", label: "Risks", singular: "Risk", color: "#de350b", bg: "#ffebe6", isObj: true },
+    { key: "opportunities", label: "Opportunities", singular: "Opportunity", color: "#00875a", bg: "#e3fcef", isObj: true },
+    { key: "assumptions", label: "Assumptions", singular: "Assumption", color: "#7a5c00", bg: "#fff8e1", isObj: false },
+    { key: "flows", label: "Flows", singular: "Flow", color: "#0052cc", bg: "#e6f0ff", isObj: false },
+  ];
+
+  const meta = TABS.find(t => t.key === activeTab);
+  const rawItems = project[activeTab] || [];
+  const items = rawItems.map(i =>
+    meta.isObj
+      ? (typeof i === "string" ? { id: uid(), text: i, source: "" } : i)
+      : (typeof i === "string" ? i : i.text)
+  );
+
+  const save = (updated) => {
+    update({ [activeTab]: updated });
+    setEditingIdx(null);
+  };
+
+  const startEdit = (idx) => {
+    const item = items[idx];
+    setEditingIdx(idx);
+    setEditText(meta.isObj ? item.text : item);
+    setEditSource(meta.isObj ? (item.source || "") : "");
+  };
+
+  const saveEdit = () => {
+    const updated = items.map((item, i) => {
+      if (i !== editingIdx) return item;
+      return meta.isObj ? { ...(typeof rawItems[i] === "string" ? { id: uid() } : rawItems[i]), text: editText, source: editSource } : editText;
+    });
+    save(updated);
+  };
+
+  const deleteItem = (idx) => {
+    if (!window.confirm("Delete this item?")) return;
+    save(items.filter((_, i) => i !== idx));
+  };
+
+  const addItem = () => {
+    if (!addingText.trim()) return;
+    const newItem = meta.isObj ? { id: uid(), text: addingText.trim(), source: addingSource.trim() } : addingText.trim();
+    save([...items, newItem]);
+    setAddingText("");
+    setAddingSource("");
+    setShowAdd(false);
+  };
+
+  // reset add/edit when switching tabs
+  const switchTab = (key) => {
+    setActiveTab(key);
+    setEditingIdx(null);
+    setShowAdd(false);
+    setAddingText("");
+    setAddingSource("");
+  };
+
+  return (
+    <div>
+      <div className="sec-head">
+        <div>
+          <div className="sec-title">Insights</div>
+          <div className="sec-sub">Manage risks, opportunities, assumptions and flows across all sessions and documents</div>
+        </div>
+      </div>
+
+      {/* Tab bar */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+        {TABS.map(t => (
+          <button key={t.key} onClick={() => switchTab(t.key)}
+            style={{
+              padding: "6px 16px", borderRadius: 20, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600,
+              background: activeTab === t.key ? t.color : "#f1f2f4",
+              color: activeTab === t.key ? "#fff" : "#505f79",
+              transition: "all .15s",
+            }}>
+            {t.label}
+            <span style={{ marginLeft: 6, fontSize: 11, fontWeight: 700,
+              background: activeTab === t.key ? "rgba(255,255,255,.25)" : t.bg,
+              color: activeTab === t.key ? "#fff" : t.color,
+              padding: "1px 7px", borderRadius: 10 }}>
+              {(project[t.key] || []).length}
+            </span>
+          </button>
+        ))}
+      </div>
+
+      {/* List */}
+      <div className="card" style={{ padding: 0, overflow: "hidden" }}>
+        {items.length === 0 && !showAdd && (
+          <div style={{ padding: "32px 0", textAlign: "center", color: "#97a0af", fontSize: 13 }}>
+            No {meta.label.toLowerCase()} yet. Click <strong>Add {meta.singular}</strong> below or extract from sessions.
+          </div>
+        )}
+
+        {items.map((item, idx) => {
+          const text = meta.isObj ? item.text : item;
+          const source = meta.isObj ? (item.source || "") : "";
+          const isEditing = editingIdx === idx;
+
+          return (
+            <div key={idx} style={{ display: "flex", gap: 12, alignItems: "flex-start", padding: "12px 16px", borderBottom: "1px solid #f1f2f4" }}>
+              <div style={{ width: 6, height: 6, borderRadius: "50%", background: meta.color, marginTop: 7, flexShrink: 0 }} />
+              <div style={{ flex: 1 }}>
+                {isEditing ? (
+                  <>
+                    <textarea value={editText} onChange={e => setEditText(e.target.value)} rows={2} autoFocus
+                      style={{ width: "100%", fontSize: 13, padding: "6px 8px", border: "1px solid #c1c7d0", borderRadius: 4, resize: "vertical", boxSizing: "border-box" }} />
+                    {meta.isObj && (
+                      <input value={editSource} onChange={e => setEditSource(e.target.value)}
+                        placeholder="Source (optional)" style={{ width: "100%", fontSize: 12, padding: "5px 8px", border: "1px solid #c1c7d0", borderRadius: 4, marginTop: 4, boxSizing: "border-box" }} />
+                    )}
+                    <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+                      <button className="btn btn-primary btn-sm" onClick={saveEdit}>Save</button>
+                      <button className="btn btn-ghost btn-sm" onClick={() => setEditingIdx(null)}>Cancel</button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 13, color: "#172b4d", lineHeight: 1.55 }}>{text}</div>
+                    {source && <div style={{ fontSize: 11, color: "#97a0af", marginTop: 3 }}>Source: {source}</div>}
+                  </>
+                )}
+              </div>
+              {!isEditing && (
+                <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                  <button className="icon-btn" onClick={() => startEdit(idx)} title="Edit"><Edit2 size={13} /></button>
+                  <button className="icon-btn" onClick={() => deleteItem(idx)} title="Delete"><Trash2 size={13} /></button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+
+        {/* Inline add form */}
+        {showAdd && (
+          <div style={{ padding: "12px 16px", borderBottom: "1px solid #f1f2f4", background: "#fafbfc" }}>
+            <textarea value={addingText} onChange={e => setAddingText(e.target.value)} rows={2} autoFocus
+              placeholder={`New ${meta.singular.toLowerCase()}…`}
+              style={{ width: "100%", fontSize: 13, padding: "6px 8px", border: "1px solid #c1c7d0", borderRadius: 4, resize: "vertical", boxSizing: "border-box" }} />
+            {meta.isObj && (
+              <input value={addingSource} onChange={e => setAddingSource(e.target.value)}
+                placeholder="Source (optional)" style={{ width: "100%", fontSize: 12, padding: "5px 8px", border: "1px solid #c1c7d0", borderRadius: 4, marginTop: 4, boxSizing: "border-box" }} />
+            )}
+            <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+              <button className="btn btn-primary btn-sm" onClick={addItem}>Add</button>
+              <button className="btn btn-ghost btn-sm" onClick={() => { setShowAdd(false); setAddingText(""); setAddingSource(""); }}>Cancel</button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {!showAdd && (
+        <button className="btn btn-ghost" style={{ marginTop: 12 }} onClick={() => setShowAdd(true)}>
+          <Plus size={13} /> Add {meta.singular}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ─── Discovery Documents ──────────────────────────────────────────────────────
 function DiscoveryDocuments({ project, update }) {
   const [processing, setProcessing] = useState(false);
@@ -4526,6 +4914,9 @@ function DiscoveryDocuments({ project, update }) {
     if (!ACCEPTED.includes(ext)) {
       alert("Unsupported file type. Please upload a PDF, TXT, MD, or CSV file.");
       return;
+    }
+    if (docs.some(d => d.filename === file.name)) {
+      if (!window.confirm(`A document named "${file.name}" already exists. Upload anyway?`)) return;
     }
     setProcessing(true);
     try {
@@ -5647,6 +6038,228 @@ function DiscoveryPlanning({ project, update }) {
               <span style={{ fontSize: 13, color: "#344563", flex: 1 }}>{spike}</span>
             </div>
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Wireframe Prototype ──────────────────────────────────────────────────────
+function WireframePrototype({ project, update, storageKey = "wireframe" }) {
+  const stored = project[storageKey] || {};
+  const [screens, setScreens] = useState(() => {
+    if (stored.screens?.length) return stored.screens;
+    return (project.backbone || []).flatMap(stage =>
+      (stage.epics || []).map(epic => ({
+        id: uid(), name: epic.title,
+        description: `${stage.stage} — ${(epic.features || []).slice(0, 3).map(f => f.title || f).join(", ")}`,
+      }))
+    ).slice(0, 12);
+  });
+  const [html, setHtml] = useState(stored.html || "");
+  const [generating, setGenerating] = useState(false);
+  const [iterPrompt, setIterPrompt] = useState("");
+  const [iterating, setIterating] = useState(false);
+  const [view, setView] = useState(stored.html ? "preview" : "define");
+  const [editingScreen, setEditingScreen] = useState(null);
+
+  const isMobile = /(mobile|app|ios|android)/i.test(project.platform || "");
+
+  const buildPrompt = (extra = "") => {
+    const list = screens.map((s, i) => `  ${i + 1}. "${s.name}"${s.description ? ` — ${s.description}` : ""}`).join("\n");
+    return `Generate a complete, self-contained HTML lo-fi wireframe prototype.
+
+PROJECT: ${project.name}
+About: ${project.about || ""}
+Platform: ${project.platform || "web"} ${isMobile ? "(mobile — max-width 390px, centered)" : "(desktop — full width)"}
+Industry: ${project.industry || ""}
+${extra ? `\nCHANGE REQUEST: ${extra}\n` : ""}
+SCREENS:
+${list}
+
+REQUIREMENTS:
+- Single .html file — inline CSS + JS only, zero external dependencies
+- Lo-fi wireframe aesthetic: gray palette (#f5f5f5 bg, #e0e0e0 placeholder boxes, #333 text)
+- ${isMobile ? "Center content at max-width:390px with a phone-style chrome border" : "Full-width desktop with proper top nav or sidebar as appropriate"}
+- Each screen: <div class="screen" id="screen-SLUG"> — only one visible at a time
+- Every clickable element (buttons, links, nav items) MUST call showScreen('screen-SLUG') — nothing should be a dead end
+- Fixed breadcrumb bar at top: project name + current screen name + back button
+- Placeholder images: <div style="background:#ddd;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#999;font-size:12px">Image</div>
+- Realistic placeholder text (not Lorem Ipsum) — make it feel like the real product
+- Include a simple screen switcher footer so testers can jump to any screen
+- First visible screen = most logical entry point (login or home)
+
+Return ONLY the complete HTML document. No markdown fences. No explanation. Begin with <!DOCTYPE html>.`;
+  };
+
+  const persistHtml = (newHtml, newScreens) => {
+    update({ [storageKey]: { screens: newScreens || screens, html: newHtml, lastGenerated: new Date().toISOString().split("T")[0] } });
+  };
+
+  const generate = async () => {
+    if (!screens.length) return;
+    setGenerating(true);
+    const reply = await askClaude([{ role: "user", content: buildPrompt() }],
+      "You are a UX wireframe generator. Output ONLY a complete self-contained HTML document. No markdown. No explanation. Start with <!DOCTYPE html>.", 6000);
+    setGenerating(false);
+    const clean = reply.replace(/^```html?\s*/i, "").replace(/\n?```\s*$/, "").trim();
+    setHtml(clean);
+    persistHtml(clean);
+    setView("preview");
+  };
+
+  const iterate = async () => {
+    if (!iterPrompt.trim() || !html) return;
+    setIterating(true);
+    const reply = await askClaude(
+      [{ role: "user", content: `Current HTML wireframe:\n\n${html}\n\n---\nCHANGE REQUEST: ${iterPrompt}\n\nApply the changes and return the COMPLETE updated HTML. No markdown. No explanation.` }],
+      "You are a UX wireframe generator. Apply the requested changes and return the complete updated HTML document. No markdown fences. No explanation.", 6000);
+    setIterating(false);
+    const clean = reply.replace(/^```html?\s*/i, "").replace(/\n?```\s*$/, "").trim();
+    setHtml(clean);
+    persistHtml(clean);
+    setIterPrompt("");
+  };
+
+  const download = () => {
+    const blob = new Blob([html], { type: "text/html" });
+    const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: `${(project.name || "wireframe").replace(/\s+/g, "-").toLowerCase()}-prototype.html` });
+    a.click();
+    URL.revokeObjectURL(a.href);
+  };
+
+  const openExternal = () => {
+    const blob = new Blob([html], { type: "text/html" });
+    window.open(URL.createObjectURL(blob), "_blank");
+  };
+
+  return (
+    <div>
+      {/* View toggle */}
+      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
+        {[["define", "Screens"], ["preview", "Preview"]].map(([v, lbl]) => (
+          <button key={v} onClick={() => setView(v)} disabled={v === "preview" && !html}
+            style={{ padding: "6px 18px", borderRadius: 20, border: "none", cursor: v === "preview" && !html ? "not-allowed" : "pointer", fontSize: 13, fontWeight: 600, transition: "all .15s",
+              background: view === v ? "#172b4d" : "#f1f2f4", color: view === v ? "#fff" : "#505f79", opacity: v === "preview" && !html ? .4 : 1 }}>
+            {lbl}
+          </button>
+        ))}
+        {html && <span style={{ marginLeft: "auto", fontSize: 11, color: "#97a0af", alignSelf: "center" }}>Last generated: {stored.lastGenerated || "today"}</span>}
+      </div>
+
+      {/* ── DEFINE SCREENS ── */}
+      {view === "define" && (
+        <div>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+            <div style={{ fontSize: 13, color: "#6b778c", lineHeight: 1.5 }}>
+              Define the screens to prototype. Order matters — screen 1 is the entry point.<br />
+              <span style={{ fontSize: 12, color: "#97a0af" }}>Tip: import from your story map or add manually.</span>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              {(project.backbone || []).length > 0 && (
+                <button className="btn btn-ghost btn-sm" onClick={() => {
+                  const auto = (project.backbone || []).flatMap(stage =>
+                    (stage.epics || []).map(epic => ({
+                      id: uid(), name: epic.title,
+                      description: `${stage.stage} — ${(epic.features || []).slice(0, 3).map(f => f.title || f).join(", ")}`,
+                    }))
+                  ).slice(0, 12);
+                  if (auto.length) setScreens(auto);
+                }}><Sparkles size={12} /> Import from Story Map</button>
+              )}
+              <button className="btn btn-ghost btn-sm" onClick={() => setScreens(s => [...s, { id: uid(), name: "New Screen", description: "" }])}>
+                <Plus size={12} /> Add Screen
+              </button>
+            </div>
+          </div>
+
+          {screens.length === 0 && (
+            <Empty icon={<Layers size={36} />} title="No screens defined"
+              sub="Add screens manually or import from your story map backbone" />
+          )}
+
+          {screens.map((s, idx) => (
+            <div key={s.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 14px", background: "#fff", border: "1px solid #dfe1e6", borderRadius: 8, marginBottom: 6 }}>
+              <div style={{ width: 24, height: 24, borderRadius: "50%", background: "#172b4d", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, flexShrink: 0, marginTop: 1 }}>{idx + 1}</div>
+              {editingScreen?.id === s.id ? (
+                <div style={{ flex: 1 }}>
+                  <input value={editingScreen.name} onChange={e => setEditingScreen(es => ({ ...es, name: e.target.value }))} autoFocus
+                    style={{ width: "100%", fontSize: 13, fontWeight: 600, padding: "4px 8px", border: "1px solid #c1c7d0", borderRadius: 4, marginBottom: 4, boxSizing: "border-box" }} />
+                  <input value={editingScreen.description} onChange={e => setEditingScreen(es => ({ ...es, description: e.target.value }))}
+                    placeholder="Brief description — what does this screen do?" style={{ width: "100%", fontSize: 12, padding: "4px 8px", border: "1px solid #c1c7d0", borderRadius: 4, boxSizing: "border-box" }} />
+                  <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                    <button className="btn btn-primary btn-sm" onClick={() => { setScreens(ss => ss.map(x => x.id === editingScreen.id ? editingScreen : x)); setEditingScreen(null); }}>Save</button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => setEditingScreen(null)}>Cancel</button>
+                  </div>
+                </div>
+              ) : (
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: "#172b4d" }}>{s.name}</div>
+                  {s.description && <div style={{ fontSize: 12, color: "#6b778c", marginTop: 2 }}>{s.description}</div>}
+                </div>
+              )}
+              {editingScreen?.id !== s.id && (
+                <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                  <button className="icon-btn" onClick={() => setEditingScreen({ ...s })}><Edit2 size={12} /></button>
+                  <button className="icon-btn" onClick={() => setScreens(ss => ss.filter(x => x.id !== s.id))}><Trash2 size={12} /></button>
+                </div>
+              )}
+            </div>
+          ))}
+
+          {screens.length > 0 && (
+            <div style={{ marginTop: 20 }}>
+              <button className="btn btn-ai" onClick={generate} disabled={generating}
+                style={{ width: "100%", justifyContent: "center", padding: "13px", fontSize: 14 }}>
+                {generating ? "Building prototype…" : <><Sparkles size={15} /> Generate Interactive Prototype</>}
+              </button>
+              {generating && <div style={{ fontSize: 12, color: "#97a0af", textAlign: "center", marginTop: 8 }}>Claude is building all {screens.length} screens — this takes 20–40 seconds…</div>}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── PREVIEW ── */}
+      {view === "preview" && html && (
+        <div>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+            <div style={{ fontSize: 12, color: "#6b778c" }}>Click through the prototype — all navigation is live.</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-ghost btn-sm" onClick={openExternal}><ArrowUpRight size={12} /> Open in Tab</button>
+              <button className="btn btn-ghost btn-sm" onClick={download}><ArrowUpRight size={12} /> Download HTML</button>
+              <button className="btn btn-ai btn-sm" onClick={generate} disabled={generating}>
+                <Sparkles size={12} /> {generating ? "Regenerating…" : "Regenerate"}
+              </button>
+            </div>
+          </div>
+
+          {/* Browser chrome + iframe */}
+          <div style={{ border: "1px solid #dfe1e6", borderRadius: 10, overflow: "hidden", marginBottom: 16 }}>
+            <div style={{ padding: "8px 12px", background: "#f8f9fa", borderBottom: "1px solid #dfe1e6", display: "flex", gap: 6, alignItems: "center" }}>
+              <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#ff5f57" }} />
+              <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#febc2e" }} />
+              <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#28c840" }} />
+              <div style={{ flex: 1, background: "#e8eaed", borderRadius: 4, padding: "2px 12px", fontSize: 11, color: "#5f6368", marginLeft: 8, fontFamily: "monospace" }}>
+                {project.name} — Lo-fi Prototype
+              </div>
+            </div>
+            <iframe srcDoc={html} style={{ width: "100%", height: isMobile ? 780 : 640, border: "none", display: "block" }} title="Wireframe prototype" />
+          </div>
+
+          {/* Iteration */}
+          <div className="card" style={{ padding: 14 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: "#172b4d", marginBottom: 4 }}>Iterate</div>
+            <div style={{ fontSize: 12, color: "#6b778c", marginBottom: 10 }}>Describe a change and Claude will update the prototype in place.</div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input value={iterPrompt} onChange={e => setIterPrompt(e.target.value)}
+                onKeyDown={e => e.key === "Enter" && iterate()}
+                placeholder='e.g. "Add a sidebar to dashboard", "Show empty state on the list screen", "Add a settings page"'
+                style={{ flex: 1, fontSize: 13 }} disabled={iterating} />
+              <button className="btn btn-ai" onClick={iterate} disabled={iterating || !iterPrompt.trim()} style={{ flexShrink: 0 }}>
+                {iterating ? "Updating…" : <><Sparkles size={13} /> Apply</>}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
