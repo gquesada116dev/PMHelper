@@ -4172,6 +4172,8 @@ function DiscoverySessions({ project, update }) {
   const [modal, setModal] = useState(null);
   const [sessionForm, setSessionForm] = useState({ date: new Date().toISOString().split("T")[0], title: "", participants: "", notes: "" });
   const [extracting, setExtracting] = useState(null);
+  const [shareSession, setShareSession] = useState(null);
+  const [copied, setCopied] = useState(false);
   const sessions = project.sessions || [];
 
   const saveSession = () => {
@@ -4180,6 +4182,31 @@ function DiscoverySessions({ project, update }) {
     update({ sessions: [...sessions, session] });
     setModal(null);
     setSessionForm({ date: new Date().toISOString().split("T")[0], title: "", participants: "", notes: "" });
+  };
+
+  const deleteSession = (id) => {
+    if (!window.confirm("Delete this session? This cannot be undone.")) return;
+    update({ sessions: sessions.filter(s => s.id !== id) });
+  };
+
+  const buildShareText = (s) => {
+    const lines = [
+      `# ${s.title}`,
+      `**Date:** ${s.date}`,
+      `**Participants:** ${s.participants}`,
+      "",
+      "## Notes",
+      s.notes || "_No notes recorded._",
+    ];
+    if (s.outputs) {
+      if (s.outputs.keyDecisions?.length) { lines.push("", "## Key Decisions"); s.outputs.keyDecisions.forEach(d => lines.push(`- ${d}`)); }
+      if (s.outputs.risks?.length) { lines.push("", "## Risks Identified"); s.outputs.risks.forEach(r => lines.push(`- ${r}`)); }
+      if (s.outputs.opportunities?.length) { lines.push("", "## Opportunities"); s.outputs.opportunities.forEach(o => lines.push(`- ${o}`)); }
+      if (s.outputs.assumptions?.length) { lines.push("", "## Assumptions"); s.outputs.assumptions.forEach(a => lines.push(`- ${a}`)); }
+      if (s.outputs.openQuestions?.length) { lines.push("", "## Open Questions"); s.outputs.openQuestions.forEach(q => lines.push(`- ${q}`)); }
+      if (s.outputs.flows?.length) { lines.push("", "## Flows Mapped"); s.outputs.flows.forEach(f => lines.push(`- ${f}`)); }
+    }
+    return lines.join("\n");
   };
 
   const extractOutputs = async (session) => {
@@ -4247,13 +4274,19 @@ function DiscoverySessions({ project, update }) {
                 <div style={{ fontWeight: 600, fontSize: 14, color: "#172b4d" }}>{s.title}</div>
                 <div style={{ fontSize: 12, color: "#97a0af", marginTop: 2 }}>{s.date} · {s.participants}</div>
               </div>
-              <div style={{ display: "flex", gap: 8 }}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                 {!s.outputs && s.notes && (
                   <button className="btn btn-ai btn-sm" onClick={() => extractOutputs(s)} disabled={extracting === s.id}>
                     {extracting === s.id ? "Extracting..." : <><Sparkles size={12} /> Extract Outputs</>}
                   </button>
                 )}
                 {s.outputs && <span style={{ fontSize: 11, color: "#36b37e", fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}><Check size={12} /> Outputs extracted</span>}
+                <button className="btn btn-ghost btn-sm" onClick={() => setShareSession(s)} title="Share session notes">
+                  <ArrowUpRight size={12} /> Share
+                </button>
+                <button className="icon-btn" onClick={() => deleteSession(s.id)} title="Delete session">
+                  <Trash2 size={13} />
+                </button>
               </div>
             </div>
             {s.notes && <p style={{ fontSize: 12, color: "#6b778c", lineHeight: 1.6, marginBottom: s.outputs ? 10 : 0 }}>{s.notes.slice(0, 200)}{s.notes.length > 200 ? "..." : ""}</p>}
@@ -4277,6 +4310,27 @@ function DiscoverySessions({ project, update }) {
           </div>
           <div className="field"><label>Participants</label><input value={sessionForm.participants} onChange={e => setSessionForm(f => ({ ...f, participants: e.target.value }))} placeholder="e.g. PM, Design Lead, CTO, 2 users" /></div>
           <div className="field"><label>Session Notes</label><textarea value={sessionForm.notes} onChange={e => setSessionForm(f => ({ ...f, notes: e.target.value }))} placeholder="Paste your raw meeting notes here — the more detail, the better the AI extraction..." rows={8} /></div>
+        </Modal>
+      )}
+
+      {shareSession && (
+        <Modal wide title={`Share — ${shareSession.title}`} onClose={() => { setShareSession(null); setCopied(false); }}
+          footer={
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
+              <span style={{ fontSize: 12, color: "#97a0af" }}>Copy and paste into Slack, Notion, email, or any tool</span>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn btn-ghost" onClick={() => { setShareSession(null); setCopied(false); }}>Close</button>
+                <button className="btn btn-primary" onClick={() => { navigator.clipboard.writeText(buildShareText(shareSession)); setCopied(true); setTimeout(() => setCopied(false), 2500); }}>
+                  {copied ? <><Check size={13} /> Copied!</> : <><Copy size={13} /> Copy Notes</>}
+                </button>
+              </div>
+            </div>
+          }>
+          <div style={{ background: "#f4f5f7", border: "1px solid #dfe1e6", borderRadius: 8, padding: "16px 20px", maxHeight: "55vh", overflowY: "auto" }}>
+            <div className="md-agenda">
+              <ReactMarkdown>{buildShareText(shareSession)}</ReactMarkdown>
+            </div>
+          </div>
         </Modal>
       )}
     </div>
