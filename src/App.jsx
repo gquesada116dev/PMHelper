@@ -863,6 +863,7 @@ export default function App() {
     "d-overview": <DiscoveryOverview project={project} update={update} setSection={setSection} />,
     "d-meetings": <DiscoveryMeetingPrep project={project} update={update} />,
     "d-sessions": <DiscoverySessions project={project} update={update} />,
+    "d-stakeholders": <DiscoveryStakeholders project={project} update={update} />,
     "d-ai": <DiscoveryAIColleague project={project} update={update} />,
     "d-storymap": <StoryMappingSection project={project} update={update} />,
     "d-planning": <DiscoveryPlanning project={project} update={update} />,
@@ -941,6 +942,7 @@ function Sidebar({ projects, pid, setPid, section, setSection, onNew, jiraConnec
     { id: "d-overview", label: "Overview", Icon: Compass, section: null },
     { id: "d-meetings", label: "Meeting Prep", Icon: ClipboardList, section: "DISCOVERY" },
     { id: "d-sessions", label: "Sessions & Outputs", Icon: FileText, section: null },
+    { id: "d-stakeholders", label: "Stakeholders", Icon: Users, section: null },
     { id: "d-storymap", label: "Story Mapping", Icon: Map, section: "MAPPING" },
     { id: "d-planning", label: "Tech Planning", Icon: Cpu, section: "PLANNING" },
     { id: "d-design", label: "Design Planning", Icon: Palette, section: null },
@@ -4034,7 +4036,7 @@ function DiscoveryOverview({ project, update, setSection }) {
           <div style={{ fontSize: 13, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne',sans-serif", marginBottom: 12 }}>Discovery Status</div>
           {[
             { label: "Sessions logged", value: (project.sessions || []).length, color: "#0052cc", ok: (project.sessions || []).length > 0 },
-            { label: "Story map stages", value: (project.backbone || []).length, color: "#5b21b6", ok: (project.backbone || []).length > 0 },
+            { label: "Stakeholders mapped", value: (project.stakeholders || []).length, color: "#5b21b6", ok: (project.stakeholders || []).length > 0 },
             { label: "Risks identified", value: (project.risks || []).length, color: "#de350b", ok: (project.risks || []).length > 0 },
             { label: "Opportunities", value: (project.opportunities || []).length, color: "#00875a", ok: (project.opportunities || []).length > 0 },
           ].map(({ label, value, color, ok }) => (
@@ -4055,6 +4057,7 @@ function DiscoveryOverview({ project, update, setSection }) {
           {[
             { id: "d-meetings", label: "Meeting Prep", desc: "Generate agenda & prepare questions", Icon: ClipboardList },
             { id: "d-sessions", label: "Sessions", desc: "Log notes, extract insights with AI", Icon: FileText },
+            { id: "d-stakeholders", label: "Stakeholders", desc: "Map influence, auto-fill from sessions", Icon: Users },
             { id: "d-ai", label: "AI Colleague", desc: "Validate ideas, prep meetings, find gaps", Icon: Bot },
             { id: "d-storymap", label: "Story Mapping", desc: "Backbone → Epics → Features", Icon: Map },
             { id: "d-planning", label: "Tech Planning", desc: "Architecture, NFRs, ADRs", Icon: Cpu },
@@ -4481,6 +4484,202 @@ function DiscoverySessions({ project, update }) {
               <ReactMarkdown>{buildShareText(shareSession)}</ReactMarkdown>
             </div>
           </div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── Discovery Stakeholders ───────────────────────────────────────────────────
+function DiscoveryStakeholders({ project, update }) {
+  const blank = { name: "", role: "", influence: "Medium", availability: "Available", notes: "" };
+  const [modal, setModal] = useState(null);
+  const [form, setForm] = useState(blank);
+  const [extracting, setExtracting] = useState(false);
+  const [suggestions, setSuggestions] = useState([]);
+
+  const stakeholders = project.stakeholders || [];
+  const sessions = project.sessions || [];
+
+  const save = () => {
+    if (!form.name.trim()) return;
+    if (form.id) {
+      update({ stakeholders: stakeholders.map(s => s.id === form.id ? form : s) });
+    } else {
+      update({ stakeholders: [...stakeholders, { ...form, id: uid() }] });
+    }
+    setModal(null);
+  };
+
+  const del = id => {
+    if (!window.confirm("Remove this stakeholder?")) return;
+    update({ stakeholders: stakeholders.filter(s => s.id !== id) });
+  };
+
+  const edit = s => { setForm(s); setModal("edit"); };
+
+  const extractFromSessions = async () => {
+    if (sessions.length === 0) return;
+    setExtracting(true);
+    setSuggestions([]);
+    setModal("suggest");
+
+    const sessionData = sessions.map(s =>
+      `Session: "${s.title}" (${s.date})\nParticipants: ${s.participants}\nNotes: ${s.notes || "none"}\nKey decisions: ${s.outputs?.keyDecisions?.join(", ") || "none"}`
+    ).join("\n\n");
+
+    const existingNames = stakeholders.map(s => s.name.toLowerCase());
+
+    const reply = await askClaude([{ role: "user", content:
+      `Extract stakeholders from these discovery session records.\n\nProject: ${project.name} (${project.industry})\n\n${sessionData}\n\nReturn a JSON array of stakeholders found. For each person extract:\n- name: their name or best guess from role (e.g. "Lacoste CMO" if no name given)\n- role: their job title or function\n- influence: "High", "Medium", or "Low" (infer from their role and participation)\n- availability: "Available", "Hard to reach", or "Key gatekeeper"\n- notes: any specific concern, position, or agenda mentioned in the notes\n\nOnly include real people mentioned. Skip generic roles like "PM", "Design Lead" unless more context is given. Return only valid JSON array.`
+    }], "Extract people from meeting notes. Return only valid JSON array.", 1200);
+
+    setExtracting(false);
+    const parsed = parseJSON(reply);
+    if (Array.isArray(parsed)) {
+      const newOnes = parsed.filter(p => p.name && !existingNames.includes(p.name.toLowerCase()));
+      setSuggestions(newOnes.map(p => ({ ...p, _selected: true, id: uid() })));
+    }
+  };
+
+  const acceptSuggestions = () => {
+    const toAdd = suggestions.filter(s => s._selected).map(({ _selected, ...s }) => s);
+    if (toAdd.length > 0) update({ stakeholders: [...stakeholders, ...toAdd] });
+    setModal(null);
+    setSuggestions([]);
+  };
+
+  const influenceColor = { High: "#de350b", Medium: "#7a5c00", Low: "#42526e" };
+  const influenceBg = { High: "#ffebe6", Medium: "#fff8e1", Low: "#f1f2f4" };
+
+  return (
+    <div>
+      <div className="sec-head">
+        <div>
+          <div className="sec-title">Stakeholders</div>
+          <div className="sec-sub">Map who matters in this discovery — influence, availability, and agenda</div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {sessions.length > 0 && (
+            <button className="btn btn-ai" onClick={extractFromSessions} disabled={extracting}>
+              <Sparkles size={13} /> Extract from sessions
+            </button>
+          )}
+          <button className="btn btn-primary" onClick={() => { setForm(blank); setModal("edit"); }}>
+            <Plus size={13} /> Add Stakeholder
+          </button>
+        </div>
+      </div>
+
+      {stakeholders.length === 0 ? (
+        <Empty icon={<Users size={36} />} title="No stakeholders mapped yet"
+          sub="Add manually or extract automatically from your session participants"
+          action={
+            <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+              {sessions.length > 0 && <button className="btn btn-ai" onClick={extractFromSessions}><Sparkles size={13} /> Extract from sessions</button>}
+              <button className="btn btn-primary" onClick={() => { setForm(blank); setModal("edit"); }}><Plus size={13} /> Add first stakeholder</button>
+            </div>
+          } />
+      ) : (
+        <div>
+          {stakeholders.map(s => (
+            <div key={s.id} className="card" style={{ display: "flex", alignItems: "flex-start", gap: 14 }}>
+              <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#ebecf0", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 13, color: "#172b4d", flexShrink: 0 }}>
+                {s.name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}
+              </div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, flexWrap: "wrap" }}>
+                  <span style={{ fontWeight: 600, fontSize: 14, color: "#172b4d" }}>{s.name}</span>
+                  <span className="tag tag-muted">{s.role}</span>
+                  <span style={{ fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono',monospace", padding: "1px 7px", borderRadius: 4, background: influenceBg[s.influence] || "#f1f2f4", color: influenceColor[s.influence] || "#42526e" }}>
+                    {s.influence} influence
+                  </span>
+                  {s.availability && s.availability !== "Available" && (
+                    <span style={{ fontSize: 10, fontWeight: 600, fontFamily: "'DM Mono',monospace", padding: "1px 7px", borderRadius: 4, background: "#f3e6ff", color: "#5b21b6" }}>
+                      {s.availability}
+                    </span>
+                  )}
+                </div>
+                {s.notes && <p style={{ fontSize: 12, color: "#6b778c", lineHeight: 1.55, margin: 0 }}>{s.notes}</p>}
+              </div>
+              <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                <button className="icon-btn" onClick={() => edit(s)}><Edit2 size={13} /></button>
+                <button className="icon-btn" onClick={() => del(s.id)}><Trash2 size={13} /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add / Edit modal */}
+      {modal === "edit" && (
+        <Modal title={form.id ? "Edit Stakeholder" : "New Stakeholder"} onClose={() => setModal(null)}
+          footer={<><button className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button><button className="btn btn-primary" onClick={save}>Save</button></>}>
+          <div className="row">
+            <div className="field"><label>Name</label><input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder="Full name or title (e.g. Lacoste CMO)" autoFocus /></div>
+            <div className="field"><label>Role / Title</label><input value={form.role} onChange={e => setForm(f => ({ ...f, role: e.target.value }))} placeholder="e.g. Chief Marketing Officer" /></div>
+          </div>
+          <div className="row">
+            <div className="field">
+              <label>Influence</label>
+              <select value={form.influence} onChange={e => setForm(f => ({ ...f, influence: e.target.value }))}>
+                <option>High</option><option>Medium</option><option>Low</option>
+              </select>
+            </div>
+            <div className="field">
+              <label>Availability</label>
+              <select value={form.availability} onChange={e => setForm(f => ({ ...f, availability: e.target.value }))}>
+                <option>Available</option><option>Hard to reach</option><option>Key gatekeeper</option>
+              </select>
+            </div>
+          </div>
+          <div className="field"><label>Notes</label><textarea value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} placeholder="Their agenda, concerns, communication preferences, decisions they've made..." rows={3} /></div>
+        </Modal>
+      )}
+
+      {/* Extraction suggestions modal */}
+      {modal === "suggest" && (
+        <Modal title="Extract Stakeholders from Sessions" onClose={() => { setModal(null); setSuggestions([]); }}
+          footer={
+            !extracting && suggestions.length > 0
+              ? <><button className="btn btn-ghost" onClick={() => { setModal(null); setSuggestions([]); }}>Cancel</button>
+                  <button className="btn btn-primary" onClick={acceptSuggestions}>
+                    <Check size={13} /> Add selected ({suggestions.filter(s => s._selected).length})
+                  </button></>
+              : <button className="btn btn-ghost" onClick={() => { setModal(null); setSuggestions([]); }}>Close</button>
+          }>
+          {extracting ? (
+            <div style={{ textAlign: "center", padding: "32px 0" }}>
+              <div style={{ display: "flex", gap: 6, justifyContent: "center", marginBottom: 12 }}><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div>
+              <div style={{ fontSize: 13, color: "#505f79" }}>Reading {sessions.length} session{sessions.length > 1 ? "s" : ""}…</div>
+            </div>
+          ) : suggestions.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "24px 0", fontSize: 13, color: "#6b778c" }}>
+              No new stakeholders found in the session notes.
+            </div>
+          ) : (
+            <div>
+              <p style={{ fontSize: 13, color: "#6b778c", marginBottom: 16, lineHeight: 1.6 }}>
+                Found {suggestions.length} stakeholder{suggestions.length > 1 ? "s" : ""} from your session records. Select the ones to add.
+              </p>
+              {suggestions.map((s, i) => (
+                <div key={s.id} style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "10px 0", borderBottom: i < suggestions.length - 1 ? "1px solid #ebecf0" : "none" }}>
+                  <input type="checkbox" checked={s._selected} onChange={e => setSuggestions(prev => prev.map((p, j) => j === i ? { ...p, _selected: e.target.checked } : p))}
+                    style={{ marginTop: 3, accentColor: "#e8c547", flexShrink: 0 }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3, flexWrap: "wrap" }}>
+                      <span style={{ fontWeight: 600, fontSize: 13, color: "#172b4d" }}>{s.name}</span>
+                      <span className="tag tag-muted">{s.role}</span>
+                      <span style={{ fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono',monospace", padding: "1px 7px", borderRadius: 4, background: influenceBg[s.influence] || "#f1f2f4", color: influenceColor[s.influence] || "#42526e" }}>
+                        {s.influence}
+                      </span>
+                    </div>
+                    {s.notes && <p style={{ fontSize: 12, color: "#6b778c", margin: 0, lineHeight: 1.5 }}>{s.notes}</p>}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
         </Modal>
       )}
     </div>
