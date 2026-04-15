@@ -5839,7 +5839,7 @@ function DiscoveryStakeholders({ project, update }) {
 
 // ─── Discovery AI Colleague ───────────────────────────────────────────────────
 function DiscoveryAIColleague({ project, update }) {
-  const WELCOME = { role: "ai", text: `Hi! I'm your discovery colleague for **${project.name}**.\n\nI have full context of everything you've gathered — sessions, risks, opportunities, assumptions, story map, architecture, and more.\n\nUse me to **validate ideas**, **prep for meetings**, **identify gaps**, or just think out loud. I can also add risks, opportunities, assumptions, and flows directly to your project.\n\nWhat's on your mind?` };
+  const WELCOME = { role: "ai", text: `Hey — I'm your product colleague on **${project.name}**.\n\nI know the project context and I'm here to think with you, not lecture you. You don't need to have all the answers — that's not your job. Your job is to understand the problem, align people, and make good calls.\n\nUse me to **prep a conversation**, **pressure-test an idea**, **figure out what's missing**, or just think out loud. When something needs a specialist, I'll tell you and help you frame the right question.\n\nWhat are you working through?` };
 
   const aiChats = project.aiChats || [];
   const currentChatRef = useRef(null); // tracks the active chat id without re-renders
@@ -5904,7 +5904,18 @@ function DiscoveryAIColleague({ project, update }) {
     `  - "${d.title}" (${d.filename}): ${d.summary}${d.context ? `\n    Context: ${d.context.slice(0, 200)}` : ""}`
   ).join("\n") || "  none uploaded yet";
 
-  const SYSTEM = `You are a senior product discovery facilitator and AI colleague embedded in a discovery project tool.
+  const SYSTEM = `You are a sharp, experienced AI colleague working alongside a product person — a PO, PM, Scrum Master, or Designer. They are not responsible for everything and don't need to know everything. Their job is to understand the product deeply, anticipate needs, align people, and make good decisions together with their team.
+
+Your role is to think *with* them, not dump information *at* them. You help them:
+- Stay oriented on what matters for the product and the user
+- Prepare for conversations with stakeholders, engineers, designers, and clients
+- Identify what's unclear, missing, or risky — so they can bring the right people in
+- Shape thinking, not provide exhaustive answers
+- Ask the questions a good senior PM would ask in a discovery
+
+You are NOT a technical advisor, delivery manager, or expert in every domain. When something requires a specialist (e.g. architecture decisions, legal, design details), say so clearly and help them formulate the right question to bring to that person.
+
+Keep responses focused and conversational. Prioritize what's actionable for a product person. Avoid overwhelming detail — they need signal, not noise.
 
 PROJECT: ${project.name}
 Client type: ${project.clientType || "startup"} | Industry: ${project.industry} | Platform: ${project.platform}
@@ -5932,12 +5943,6 @@ AGENDAS PREPARED (${agendas.length}): ${agendas.map(a => a.title).join(", ") || 
 ARCHITECTURE: ${project.architectureNotes ? project.architectureNotes.slice(0, 200) + "..." : "not documented"}
 NFRs: ${(project.nfrs || []).map(n => `[${n.priority}] ${n.category}`).join(", ") || "none yet"}
 
-You can:
-1. Discuss, validate, brainstorm, challenge assumptions — reply conversationally
-2. Help prepare for meetings — reference the agendas and sessions context
-3. Identify gaps, inconsistencies, or missing research areas
-4. Create discovery artifacts when asked
-
 To CREATE artifacts, include this block in your reply:
 
 ARTIFACTS:
@@ -5954,7 +5959,7 @@ assumptions items: ["assumption string", ...]
 flows items: ["User flow description", ...]
 todos items: [{ "task": "specific action", "owner": "role (e.g. PM, Design Lead)" }]
 
-Be specific to this project. Reference what's already known. Challenge vague statements. Ask good questions.`;
+Be direct. Be specific to this project. Reference what's already known. Challenge vague thinking. Ask one good question at a time when something is unclear.`;
 
   const send = async () => {
     const text = input.trim();
