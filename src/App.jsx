@@ -832,7 +832,8 @@ export default function App() {
   const update = useCallback(async (changes) => {
     const updated = { ...projects.find(p => p.id === pid), ...changes };
     setProjects(ps => ps.map(p => p.id === pid ? updated : p));
-    await supabase.from("projects").update({ data: updated }).eq("id", pid);
+    const { error } = await supabase.from("projects").update({ data: updated }).eq("id", pid);
+    if (error) console.error("Failed to save project to Supabase:", error);
   }, [pid, projects]);
 
   const handleCreate = useCallback(async (p) => {
@@ -862,6 +863,7 @@ export default function App() {
     "d-overview": <DiscoveryOverview project={project} update={update} setSection={setSection} />,
     "d-meetings": <DiscoveryMeetingPrep project={project} update={update} />,
     "d-sessions": <DiscoverySessions project={project} update={update} />,
+    "d-ai": <DiscoveryAIColleague project={project} update={update} />,
     "d-storymap": <StoryMappingSection project={project} update={update} />,
     "d-planning": <DiscoveryPlanning project={project} update={update} />,
     "d-design": <DiscoveryDesign project={project} update={update} />,
@@ -939,6 +941,7 @@ function Sidebar({ projects, pid, setPid, section, setSection, onNew, jiraConnec
     { id: "d-overview", label: "Overview", Icon: Compass, section: null },
     { id: "d-meetings", label: "Meeting Prep", Icon: ClipboardList, section: "DISCOVERY" },
     { id: "d-sessions", label: "Sessions & Outputs", Icon: FileText, section: null },
+    { id: "d-ai", label: "AI Colleague", Icon: Bot, section: null },
     { id: "d-storymap", label: "Story Mapping", Icon: Map, section: "MAPPING" },
     { id: "d-planning", label: "Tech Planning", Icon: Cpu, section: "PLANNING" },
     { id: "d-design", label: "Design Planning", Icon: Palette, section: null },
@@ -4052,6 +4055,7 @@ function DiscoveryOverview({ project, update, setSection }) {
           {[
             { id: "d-meetings", label: "Meeting Prep", desc: "Generate agenda & prepare questions", Icon: ClipboardList },
             { id: "d-sessions", label: "Sessions", desc: "Log notes, extract insights with AI", Icon: FileText },
+            { id: "d-ai", label: "AI Colleague", desc: "Validate ideas, prep meetings, find gaps", Icon: Bot },
             { id: "d-storymap", label: "Story Mapping", desc: "Backbone → Epics → Features", Icon: Map },
             { id: "d-planning", label: "Tech Planning", desc: "Architecture, NFRs, ADRs", Icon: Cpu },
             { id: "d-design", label: "Design Planning", desc: "Research plan & priorities", Icon: Palette },
@@ -4076,7 +4080,8 @@ function DiscoveryOverview({ project, update, setSection }) {
 function DiscoveryMeetingPrep({ project, update }) {
   const [generating, setGenerating] = useState(false);
   const [phase, setPhase] = useState("pre-discovery");
-  const [clientType, setClientType] = useState(project.clientType || "startup");
+  const [duration, setDuration] = useState("60");
+  const [callType, setCallType] = useState("external");
   const [extra, setExtra] = useState("");
   const [expanded, setExpanded] = useState(null);
   const [copied, setCopied] = useState(null);
@@ -4088,6 +4093,23 @@ function DiscoveryMeetingPrep({ project, update }) {
 
   const agendas = project.agendas || [];
 
+  // Migrate legacy savedAgenda string (from project creation wizard) into the agendas array
+  useEffect(() => {
+    if (project.savedAgenda && agendas.length === 0) {
+      const migrated = {
+        id: uid(),
+        title: "Pre-Discovery Kickoff",
+        phase: "pre-discovery",
+        clientType: project.clientType || "startup",
+        content: project.savedAgenda,
+        createdAt: new Date().toISOString().split("T")[0],
+        wrappedUp: false,
+      };
+      update({ agendas: [migrated], savedAgenda: "" });
+      setExpanded(migrated.id);
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const phases = [
     { id: "pre-discovery", label: "Pre-Discovery Kickoff" },
     { id: "user-research", label: "User Research Session" },
@@ -4098,10 +4120,11 @@ function DiscoveryMeetingPrep({ project, update }) {
 
   const generateAgenda = async () => {
     setGenerating(true);
+    const clientType = project.clientType || "startup";
     const phaseLabel = phases.find(p => p.id === phase)?.label || phase;
     const reply = await askClaude([{
       role: "user", content:
-        `Create a discovery meeting agenda for:\nProject: ${project.name}\nAbout: ${project.about}\nIndustry: ${project.industry}\nClient type: ${clientType}\nPhase: ${phase}\nExtra context: ${extra || "none"}\n\nGenerate a structured agenda with:\n1. Meeting objective (1 sentence)\n2. Participants suggested (with roles)\n3. Time blocks (e.g. 0:00–0:15 Welcome...)\n4. Key topics to cover (5-8 specific to this project and phase)\n5. Pre-work to send to client (2-4 items)\n6. Key questions to ask (6-10 specific, not generic)\n7. Expected outputs from this session\n\nBe SPECIFIC to this project. For a ${clientType}, the tone and depth should differ. Format it clearly with sections and time estimates. Total meeting: 90 minutes.`
+        `Create a discovery meeting agenda for:\nProject: ${project.name}\nAbout: ${project.about}\nIndustry: ${project.industry}\nClient type: ${clientType}\nPhase: ${phase}\nCall type: ${callType === "internal" ? "Internal team call" : "External client call"}\nDuration: ${duration} minutes\nExtra context: ${extra || "none"}\n\nGenerate a structured agenda with:\n1. Meeting objective (1 sentence)\n2. Participants suggested (with roles)\n3. Time blocks that fit within ${duration} minutes (e.g. 0:00–0:10 Welcome...)\n4. Key topics to cover (5-8 specific to this project and phase)\n${callType === "external" ? "5. Pre-work to send to client (2-4 items)\n6. Key questions to ask (6-10 specific, not generic)\n7. Expected outputs from this session" : "5. Key discussion points (6-10 specific, not generic)\n6. Decisions to make in this session\n7. Expected outputs and next steps"}\n\nBe SPECIFIC to this project. For a ${clientType} ${callType === "internal" ? "internal" : "client"} call, the tone and depth should differ. Format it clearly with sections and time estimates. Total meeting: ${duration} minutes.`
     }],
       "You are a senior product discovery facilitator. Create practical, specific agendas — not generic templates. Reference the project context throughout.", 2000);
     const newAgenda = {
@@ -4109,6 +4132,8 @@ function DiscoveryMeetingPrep({ project, update }) {
       title: phaseLabel,
       phase,
       clientType,
+      callType,
+      duration,
       content: reply,
       createdAt: new Date().toISOString().split("T")[0],
       wrappedUp: false,
@@ -4174,11 +4199,20 @@ function DiscoveryMeetingPrep({ project, update }) {
             </select>
           </div>
           <div className="field">
-            <label>Client Type</label>
-            <select value={clientType} onChange={e => setClientType(e.target.value)}>
-              <option value="startup">Startup</option>
-              <option value="enterprise">Enterprise</option>
-              <option value="scaleup">Scale-up</option>
+            <label>Duration (min)</label>
+            <select value={duration} onChange={e => setDuration(e.target.value)}>
+              <option value="30">30 min</option>
+              <option value="45">45 min</option>
+              <option value="60">60 min</option>
+              <option value="90">90 min</option>
+              <option value="120">120 min</option>
+            </select>
+          </div>
+          <div className="field">
+            <label>Call Type</label>
+            <select value={callType} onChange={e => setCallType(e.target.value)}>
+              <option value="external">External (client)</option>
+              <option value="internal">Internal (team)</option>
             </select>
           </div>
         </div>
@@ -4195,7 +4229,7 @@ function DiscoveryMeetingPrep({ project, update }) {
       {agendas.length === 0 && (
         <div className="card" style={{ background: "#f8f9fa" }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: "#344563", marginBottom: 10 }}>What you'll get</div>
-          {["Meeting objective tailored to your project phase", "Suggested participants with roles", "90-min time blocks with specific topics", "Pre-work checklist to send to the client", "6–10 specific questions based on your project", "Expected outputs from the session"].map((item, i) => (
+          {["Meeting objective tailored to your project phase", "Suggested participants with roles", "Time blocks fitted to your chosen duration", "Pre-work checklist (external) or discussion points (internal)", "6–10 specific questions based on your project", "Expected outputs from the session"].map((item, i) => (
             <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 6, fontSize: 13, color: "#505f79" }}>
               <span style={{ color: "#36b37e", flexShrink: 0 }}>✓</span> {item}
             </div>
@@ -4219,7 +4253,9 @@ function DiscoveryMeetingPrep({ project, update }) {
               <div style={{ flex: 1 }}>
                 <span style={{ fontSize: 13, fontWeight: 600, color: "#172b4d" }}>{a.title}</span>
                 <span style={{ fontSize: 11, color: "#97a0af", marginLeft: 8 }}>{a.createdAt}</span>
-                {a.wrappedUp && <span style={{ fontSize: 10, color: "#36b37e", fontWeight: 700, background: "#e3fcef", borderRadius: 4, padding: "1px 7px", marginLeft: 8, fontFamily: "'DM Mono',monospace" }}>LOGGED</span>}
+                {a.duration && <span style={{ fontSize: 10, color: "#0052cc", fontWeight: 600, background: "#e6f0ff", borderRadius: 4, padding: "1px 7px", marginLeft: 6, fontFamily: "'DM Mono',monospace" }}>{a.duration}min</span>}
+                {a.callType && <span style={{ fontSize: 10, color: a.callType === "internal" ? "#5b21b6" : "#7a5c00", fontWeight: 600, background: a.callType === "internal" ? "#f3e6ff" : "#fff8e1", borderRadius: 4, padding: "1px 7px", marginLeft: 4, fontFamily: "'DM Mono',monospace" }}>{a.callType === "internal" ? "INTERNAL" : "EXTERNAL"}</span>}
+                {a.wrappedUp && <span style={{ fontSize: 10, color: "#36b37e", fontWeight: 700, background: "#e3fcef", borderRadius: 4, padding: "1px 7px", marginLeft: 4, fontFamily: "'DM Mono',monospace" }}>LOGGED</span>}
               </div>
             )}
 
@@ -4447,6 +4483,213 @@ function DiscoverySessions({ project, update }) {
           </div>
         </Modal>
       )}
+    </div>
+  );
+}
+
+// ─── Discovery AI Colleague ───────────────────────────────────────────────────
+function DiscoveryAIColleague({ project, update }) {
+  const [msgs, setMsgs] = useState([
+    { role: "ai", text: `Hi! I'm your discovery colleague for **${project.name}**.\n\nI have full context of everything you've gathered — sessions, risks, opportunities, assumptions, story map, architecture, and more.\n\nUse me to **validate ideas**, **prep for meetings**, **identify gaps**, or just think out loud. I can also add risks, opportunities, assumptions, and flows directly to your project.\n\nWhat's on your mind?` }
+  ]);
+  const [input, setInput] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [pending, setPending] = useState(null);
+  const bottomRef = useRef(null);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, pending]);
+
+  const sessions = project.sessions || [];
+  const risks = project.risks || [];
+  const opportunities = project.opportunities || [];
+  const assumptions = project.assumptions || [];
+  const flows = project.flows || [];
+  const backbone = project.backbone || [];
+  const agendas = project.agendas || [];
+  const personas = project.personas || [];
+
+  const FENCE = "```";
+  const sessionSummary = sessions.map(s =>
+    `  - "${s.title}" (${s.date}, ${s.participants})${s.outputs ? `: risks=${s.outputs.risks?.length || 0}, opps=${s.outputs.opportunities?.length || 0}, decisions=${s.outputs.keyDecisions?.length || 0}` : ": no outputs extracted yet"}`
+  ).join("\n") || "  none yet";
+
+  const SYSTEM = `You are a senior product discovery facilitator and AI colleague embedded in a discovery project tool.
+
+PROJECT: ${project.name}
+Client type: ${project.clientType || "startup"} | Industry: ${project.industry} | Platform: ${project.platform}
+Discovery phase: ${project.discoveryPhase || "discovery"}
+About: ${project.about}
+
+WHAT WE KNOW:
+Assumptions (${assumptions.length}): ${assumptions.slice(0, 6).join("; ") || "none yet"}
+Risks (${risks.length}): ${risks.slice(0, 5).map(r => typeof r === "string" ? r : r.text).join("; ") || "none yet"}
+Opportunities (${opportunities.length}): ${opportunities.slice(0, 5).map(o => typeof o === "string" ? o : o.text).join("; ") || "none yet"}
+User flows mapped: ${flows.slice(0, 4).join(" | ") || "none yet"}
+Personas: ${personas.map(p => p.role).join(", ") || "none yet"}
+
+SESSIONS CONDUCTED (${sessions.length}):
+${sessionSummary}
+
+STORY MAP BACKBONE (${backbone.length} stages):
+${backbone.map(s => `  ${s.stage}: ${(s.epics || []).map(e => e.title).join(", ")}`).join("\n") || "  not yet built"}
+
+AGENDAS PREPARED (${agendas.length}): ${agendas.map(a => a.title).join(", ") || "none yet"}
+
+ARCHITECTURE: ${project.architectureNotes ? project.architectureNotes.slice(0, 200) + "..." : "not documented"}
+NFRs: ${(project.nfrs || []).map(n => `[${n.priority}] ${n.category}`).join(", ") || "none yet"}
+
+You can:
+1. Discuss, validate, brainstorm, challenge assumptions — reply conversationally
+2. Help prepare for meetings — reference the agendas and sessions context
+3. Identify gaps, inconsistencies, or missing research areas
+4. Create discovery artifacts when asked
+
+To CREATE artifacts, include this block in your reply:
+
+ARTIFACTS:
+${FENCE}json
+{
+  "type": "risks|opportunities|assumptions|flows",
+  "items": [...]
+}
+${FENCE}
+
+risks items: [{ "text": "risk description", "source": "reasoning" }]
+opportunities items: [{ "text": "opportunity description", "source": "reasoning" }]
+assumptions items: ["assumption string", ...]
+flows items: ["User flow description", ...]
+
+Be specific to this project. Reference what's already known. Challenge vague statements. Ask good questions.`;
+
+  const send = async () => {
+    const text = input.trim();
+    if (!text || loading) return;
+    setInput("");
+    const newMsgs = [...msgs, { role: "user", text }];
+    setMsgs([...newMsgs, { role: "ai", text: "..." }]);
+    setLoading(true);
+
+    const history = newMsgs.slice(-12).map(m => ({ role: m.role === "ai" ? "assistant" : "user", content: m.text }));
+    const reply = await askClaude(history, SYSTEM, 2000);
+    setLoading(false);
+
+    const artifactMatch = reply.match(/ARTIFACTS:\s*```(?:json)?\s*([\s\S]*?)```/);
+    if (artifactMatch) {
+      try {
+        const parsed = JSON.parse(artifactMatch[1].trim());
+        if (parsed.type && Array.isArray(parsed.items) && parsed.items.length > 0) {
+          const cleanReply = reply.replace(/ARTIFACTS:\s*```[\s\S]*?```/, "").trim();
+          setMsgs(prev => [...prev.slice(0, -1), { role: "ai", text: cleanReply || `I've prepared ${parsed.items.length} ${parsed.type} to add:` }]);
+          setPending(parsed);
+          return;
+        }
+      } catch {}
+    }
+    setMsgs(prev => [...prev.slice(0, -1), { role: "ai", text: reply }]);
+  };
+
+  const acceptArtifacts = () => {
+    if (!pending) return;
+    const { type, items } = pending;
+    if (type === "risks") {
+      const newRisks = items.map(r => ({ id: uid(), text: r.text, source: r.source || "AI colleague" }));
+      update({ risks: [...risks, ...newRisks] });
+      setMsgs(prev => [...prev, { role: "ai", text: `✓ Added ${newRisks.length} risk${newRisks.length > 1 ? "s" : ""} to the project.` }]);
+    } else if (type === "opportunities") {
+      const newOpps = items.map(o => ({ id: uid(), text: o.text, source: o.source || "AI colleague" }));
+      update({ opportunities: [...opportunities, ...newOpps] });
+      setMsgs(prev => [...prev, { role: "ai", text: `✓ Added ${newOpps.length} opportunit${newOpps.length > 1 ? "ies" : "y"} to the project.` }]);
+    } else if (type === "assumptions") {
+      update({ assumptions: [...assumptions, ...items] });
+      setMsgs(prev => [...prev, { role: "ai", text: `✓ Added ${items.length} assumption${items.length > 1 ? "s" : ""} to the project.` }]);
+    } else if (type === "flows") {
+      update({ flows: [...flows, ...items] });
+      setMsgs(prev => [...prev, { role: "ai", text: `✓ Added ${items.length} user flow${items.length > 1 ? "s" : ""} to the project.` }]);
+    }
+    setPending(null);
+  };
+
+  const rejectArtifacts = () => {
+    setMsgs(prev => [...prev, { role: "ai", text: "Got it — discarded. Tell me how you'd like to adjust them." }]);
+    setPending(null);
+  };
+
+  const ArtifactPreview = ({ pending }) => {
+    const { type, items } = pending;
+    const typeLabel = { risks: "Risk", opportunities: "Opportunity", assumptions: "Assumption", flows: "User Flow" }[type] || type;
+    return (
+      <div style={{ margin: "12px 0 8px", background: "#f8f9fa", border: "1px solid rgba(232,197,71,.25)", borderRadius: 10, overflow: "hidden" }}>
+        <div style={{ padding: "10px 14px", background: "rgba(232,197,71,.12)", borderBottom: "1px solid rgba(232,197,71,.15)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Sparkles size={13} color="#e8c547" />
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#e8c547" }}>{items.length} {typeLabel}{items.length > 1 ? "s" : ""} ready to add</span>
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button className="btn btn-ghost btn-xs" onClick={rejectArtifacts}><X size={11} /> Discard</button>
+            <button className="btn btn-primary btn-xs" onClick={acceptArtifacts}><Check size={11} /> Add to Project</button>
+          </div>
+        </div>
+        <div style={{ padding: "10px 14px", maxHeight: 220, overflowY: "auto" }}>
+          {items.map((item, i) => (
+            <div key={i} style={{ padding: "6px 0", borderBottom: i < items.length - 1 ? "1px solid #dfe1e6" : "none", fontSize: 13, color: "#344563" }}>
+              {typeof item === "string" ? item : item.text}
+              {item.source && <span style={{ fontSize: 11, color: "#97a0af", marginLeft: 8 }}>— {item.source}</span>}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
+  const quickPrompts = [
+    "What gaps do we still have in our research?",
+    "Challenge our top assumptions",
+    "What risks are we probably missing?",
+    "Help me prep for the next client session",
+    "Summarize where we are in discovery",
+    "What questions should we be asking?",
+  ];
+
+  return (
+    <div>
+      <div className="sec-head">
+        <div>
+          <div className="sec-title">AI Colleague</div>
+          <div className="sec-sub">Full discovery context — validate ideas, prep meetings, identify gaps, add findings</div>
+        </div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 12, color: "#97a0af" }}>
+          <span>{sessions.length} sessions</span>
+          <span>·</span>
+          <span>{risks.length} risks</span>
+          <span>·</span>
+          <span>{opportunities.length} opps</span>
+        </div>
+      </div>
+
+      <div style={{ background: "#ffffff", border: "1px solid #dfe1e6", borderRadius: 12, overflow: "hidden", display: "flex", flexDirection: "column", height: 560 }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 8px" }}>
+          {msgs.map((m, i) => (
+            <div key={i} className={`ai-bubble ai-bubble-${m.role === "ai" ? "bot" : "user"}`}>
+              {m.text === "..." ? <div className="ai-typing"><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div> : m.text}
+            </div>
+          ))}
+          {pending && <ArtifactPreview pending={pending} />}
+          <div ref={bottomRef} />
+        </div>
+        {msgs.length <= 1 && !pending && (
+          <div style={{ padding: "8px 12px", display: "flex", gap: 6, flexWrap: "wrap", borderTop: "1px solid #dfe1e6" }}>
+            {quickPrompts.map(p => (
+              <button key={p} className="btn btn-ghost btn-sm" onClick={() => setInput(p)} style={{ fontSize: 11 }}>{p}</button>
+            ))}
+          </div>
+        )}
+        <div style={{ display: "flex", gap: 8, padding: "12px", borderTop: "1px solid #dfe1e6" }}>
+          <textarea value={input} onChange={e => setInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), send())}
+            placeholder="Ask anything — validate assumptions, prep a meeting, paste notes to discuss… (Enter to send)"
+            style={{ minHeight: "unset", height: 40, padding: "10px 12px", resize: "none", flex: 1 }} />
+          <button className="btn btn-primary" onClick={send} disabled={loading || !input.trim()} style={{ padding: "8px 14px" }}><Send size={13} /></button>
+        </div>
+      </div>
     </div>
   );
 }
