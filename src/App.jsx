@@ -5,17 +5,20 @@ import {
   UserCheck, Calendar, Bot, Plus, ChevronDown, X, Sparkles, Send,
   Check, Edit2, Trash2, Zap, ChevronRight, AlertCircle, TrendingUp,
   Activity, Flag, Globe, Shield, Clock, Hash, Target, Loader,
-  MoreVertical, ArrowRight, CheckCircle2, Circle
+  MoreVertical, ArrowRight, CheckCircle2, Circle, Link, Link2, ExternalLink,
+  Settings, Unlink, Search, Map, Cpu, FileText, DollarSign, Presentation,
+  ChevronUp, Copy, GripVertical, BarChart2, GitBranch, Package, Rocket,
+  ClipboardList, Lightbulb, Compass, ArrowUpRight
 } from "lucide-react";
 
 const uid = () => Math.random().toString(36).slice(2, 9);
 
-async function askClaude(messages, system = "") {
+async function askClaude(messages, system = "", maxTokens = 1000) {
   try {
     const r = await fetch("/api/claude", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ messages, system }),
+      body: JSON.stringify({ messages, system, maxTokens }),
     });
     const d = await r.json();
     if (d.error) throw new Error(d.error);
@@ -23,6 +26,476 @@ async function askClaude(messages, system = "") {
   } catch (e) {
     return `Error: ${e.message}`;
   }
+}
+
+// ─── Jira API ────────────────────────────────────────────────────────────────
+function jiraAuth(j) { return "Basic " + btoa(j.email + ":" + j.apiToken); }
+
+async function jiraRequest(jira, path, method = "GET", body = null) {
+  const base = jira.baseUrl.replace(/\/$/, "");
+  const opts = {
+    method,
+    headers: { "Authorization": jiraAuth(jira), "Content-Type": "application/json", "Accept": "application/json" },
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(base + "/rest/api/3" + path, opts);
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.errorMessages?.[0] || data.message || "HTTP " + r.status);
+  return data;
+}
+
+function toADF(text) {
+  if (!text) return { version: 1, type: "doc", content: [] };
+  return { version: 1, type: "doc", content: text.split("\n").map(line => ({ type: "paragraph", content: line.trim() ? [{ type: "text", text: line }] : [] })) };
+}
+
+async function pushStoryToJira(jira, story, epicTitle) {
+  const desc = [story.description, story.ac && "\nAC:\n" + story.ac, story.oos && "\nOut of scope: " + story.oos].filter(Boolean).join("");
+  const fields = { project: { key: jira.projectKey }, summary: story.title, description: toADF(desc), issuetype: { name: "Story" } };
+  if ((story.teamPts ?? story.aiPts) && jira.spField) fields[jira.spField] = story.teamPts ?? story.aiPts;
+  return jiraRequest(jira, "/issue", "POST", { fields });
+}
+
+async function pushBugToJira(jira, bug) {
+  const desc = ["Steps:\n" + (bug.steps || ""), "Expected: " + (bug.expected || ""), "Current: " + (bug.current || ""), bug.suggestions && "Dev notes: " + bug.suggestions].filter(Boolean).join("\n\n");
+  return jiraRequest(jira, "/issue", "POST", { fields: { project: { key: jira.projectKey }, summary: bug.title, description: toADF(desc), issuetype: { name: "Bug" } } });
+}
+
+async function testJiraConn(jira) { return jiraRequest(jira, "/project/" + jira.projectKey); }
+
+// ─── CSV Sync (Export → any tool / Import ← any tool) ───────────────────────
+
+const SUPPORTED_TOOLS = [
+  { id: "jira",    label: "Jira",         domain: "atlassian.net",   color: "#0052cc" },
+  { id: "linear",  label: "Linear",       domain: "linear.app",      color: "#5e6ad2" },
+  { id: "github",  label: "GitHub Issues",domain: "github.com",      color: "#172b4d" },
+  { id: "shortcut",label: "Shortcut",     domain: "app.shortcut.com",color: "#a855f7" },
+  { id: "azure",   label: "Azure DevOps", domain: "dev.azure.com",   color: "#0078d4" },
+  { id: "notion",  label: "Notion",       domain: "notion.so",       color: "#172b4d" },
+];
+
+function detectTool(url) {
+  if (!url) return null;
+  return SUPPORTED_TOOLS.find(t => url.includes(t.domain)) || null;
+}
+
+function parseProjectUrl(url) {
+  if (!url) return {};
+  try {
+    const u = new URL(url.startsWith("http") ? url : "https://" + url);
+    const domain = u.hostname;
+    // Jira: extract project key from path like /browse/CAB or /jira/software/projects/CAB
+    const jiraKey = url.match(/\/(?:browse|projects)\/([A-Z][A-Z0-9]+)/)?.[1];
+    return { domain: u.origin, projectKey: jiraKey || "" };
+  } catch { return {}; }
+}
+
+function toCSV(rows) {
+  return rows.map(row =>
+    row.map(cell => {
+      const s = String(cell ?? "").replace(/"/g, '""');
+      return /[",\n\r]/.test(s) ? `"${s}"` : s;
+    }).join(",")
+  ).join("\n");
+}
+
+function exportStoriesToCSV(stories, epics, tool) {
+  const epicOf = id => epics.find(e => e.id === id)?.title || "";
+  const headers = tool?.id === "jira"
+    ? ["Summary","Issue Type","Description","Acceptance Criteria","Story Points","Epic Link","Labels","Out of Scope","Dependencies"]
+    : ["Title","Type","Description","Acceptance Criteria","Story Points","Epic","Labels","Out of Scope","Dependencies"];
+  const rows = stories.map(s => [
+    s.title,
+    "Story",
+    s.description || "",
+    s.ac || "",
+    s.teamPts ?? s.aiPts ?? "",
+    epicOf(s.epicId),
+    (s.title.match(/\[(FE|BE|FS|Mobile|Designer)\]/)?.[1] || ""),
+    s.oos || "",
+    s.deps || "",
+  ]);
+  return toCSV([headers, ...rows]);
+}
+
+function exportBugsToCSV(bugs, tool) {
+  const headers = tool?.id === "jira"
+    ? ["Summary","Issue Type","Description","Steps to Reproduce","Expected Behavior","Current Behavior","Labels"]
+    : ["Title","Type","Description","Steps","Expected","Current","Labels"];
+  const rows = bugs.map(b => [
+    b.title,
+    "Bug",
+    [b.steps && "Steps:\n" + b.steps, b.expected && "Expected: " + b.expected, b.current && "Current: " + b.current, b.suggestions && "Dev notes: " + b.suggestions].filter(Boolean).join("\n\n"),
+    b.steps || "",
+    b.expected || "",
+    b.current || "",
+    (b.title.match(/\[(FE|BE|FS|Mobile|QA|Designer)\]/)?.[1] || ""),
+  ]);
+  return toCSV([headers, ...rows]);
+}
+
+function copyStoryForTool(s, epic, tool) {
+  const toolId = tool?.id || "generic";
+  if (toolId === "jira") {
+    return `*${s.title}*\n\n*Description:*\n${s.description || ""}\n\n*Acceptance Criteria:*\n${s.ac || ""}\n\n*Epic:* ${epic || ""}\n*Story Points:* ${s.teamPts ?? s.aiPts ?? "—"}\n${s.oos ? "*Out of Scope:* " + s.oos : ""}`.trim();
+  }
+  if (toolId === "linear") {
+    return `**${s.title}**\n\n${s.description || ""}\n\n## Acceptance Criteria\n${s.ac || ""}\n\nEpic: ${epic || ""} | Points: ${s.teamPts ?? s.aiPts ?? "—"}`.trim();
+  }
+  if (toolId === "github") {
+    return `## ${s.title}\n\n${s.description || ""}\n\n### Acceptance Criteria\n\`\`\`\n${s.ac || ""}\n\`\`\`\n\n**Epic:** ${epic || ""}  **Points:** ${s.teamPts ?? s.aiPts ?? "—"}`.trim();
+  }
+  // generic markdown
+  return `## ${s.title}\n\n${s.description || ""}\n\n### Acceptance Criteria\n${s.ac || ""}\n\nEpic: ${epic || ""} | Points: ${s.teamPts ?? s.aiPts ?? "—"}`.trim();
+}
+
+function copyBugForTool(b, tool) {
+  const toolId = tool?.id || "generic";
+  if (toolId === "jira") {
+    return `*${b.title}*\n\n*Steps to Reproduce:*\n${b.steps || ""}\n\n*Expected:* ${b.expected || ""}\n*Current:* ${b.current || ""}\n${b.suggestions ? "*Dev Notes:* " + b.suggestions : ""}`.trim();
+  }
+  return `## ${b.title}\n\n**Steps:**\n${b.steps || ""}\n\n**Expected:** ${b.expected || ""}\n**Current:** ${b.current || ""}\n${b.suggestions ? "**Dev Notes:** " + b.suggestions : ""}`.trim();
+}
+
+function fuzzyMatch(a, b) {
+  const clean = s => s.toLowerCase().replace(/\[.*?\]/g, "").replace(/[^a-z0-9\s]/g, "").trim();
+  const ca = clean(a), cb = clean(b);
+  if (ca === cb) return 1;
+  if (ca.includes(cb) || cb.includes(ca)) return 0.8;
+  const wordsA = new Set(ca.split(/\s+/));
+  const wordsB = cb.split(/\s+/);
+  const overlap = wordsB.filter(w => wordsA.has(w)).length;
+  return overlap / Math.max(wordsA.size, wordsB.length);
+}
+
+function matchFromCSV(csvText, stories, bugs) {
+  const lines = csvText.trim().split("\n");
+  if (lines.length < 2) return { matched: 0, updates: [] };
+  
+  const parseRow = row => {
+    const cells = []; let cur = "", inQ = false;
+    for (const ch of row + ",") {
+      if (ch === '"') { inQ = !inQ; }
+      else if (ch === "," && !inQ) { cells.push(cur.trim()); cur = ""; }
+      else cur += ch;
+    }
+    return cells;
+  };
+
+  const headers = parseRow(lines[0]).map(h => h.toLowerCase().replace(/[^a-z0-9]/g, ""));
+  const keyCol = headers.findIndex(h => h.includes("key") || h.includes("issueid") || h.includes("id"));
+  const sumCol = headers.findIndex(h => h.includes("summary") || h.includes("title") || h.includes("name"));
+  const typeCol = headers.findIndex(h => h.includes("type") || h.includes("issuetype"));
+
+  if (keyCol === -1 || sumCol === -1) return { matched: 0, updates: [], error: "Could not find key/summary columns in CSV." };
+
+  const updates = [];
+  for (let i = 1; i < lines.length; i++) {
+    const cells = parseRow(lines[i]);
+    const key = cells[keyCol]?.trim();
+    const summary = cells[sumCol]?.trim();
+    const type = (cells[typeCol] || "").toLowerCase();
+    if (!key || !summary) continue;
+
+    const isBug = type.includes("bug");
+    const pool = isBug ? bugs : stories;
+    let best = null, bestScore = 0;
+    for (const item of pool) {
+      const score = fuzzyMatch(item.title, summary);
+      if (score > bestScore && score > 0.5) { bestScore = score; best = item; }
+    }
+    if (best) updates.push({ id: best.id, isBug, key, url: "", score: bestScore });
+  }
+  return { matched: updates.length, updates };
+}
+
+// ─── Sync Modal ──────────────────────────────────────────────────────────────
+function SyncModal({ project, update, onClose }) {
+  const jira = project.jira || {};
+  const hasJira = !!jira.connected;
+
+  // Default to Jira tab if already connected, otherwise show all options
+  const [tab, setTab] = useState(hasJira ? "jira" : "jira");
+  const [toolUrl, setToolUrl] = useState(project.syncUrl || "");
+  const [importCSV, setImportCSV] = useState("");
+  const [importResult, setImportResult] = useState(null);
+  const [exporting, setExporting] = useState(null);
+  const fileRef = useRef(null);
+
+  // Jira form state
+  const [jiraForm, setJiraForm] = useState({ baseUrl: jira.baseUrl || "", projectKey: jira.projectKey || "", email: jira.email || "", apiToken: jira.apiToken || "", spField: jira.spField || "story_points" });
+  const [jiraTesting, setJiraTesting] = useState(false);
+  const [jiraTestResult, setJiraTestResult] = useState(null);
+  const [pushingId, setPushingId] = useState(null);
+
+  const syncTool = detectTool(toolUrl);
+
+  const saveUrl = () => update({ syncUrl: toolUrl });
+
+  const testJira = async () => {
+    setJiraTesting(true); setJiraTestResult(null);
+    try {
+      const data = await testJiraConn(jiraForm);
+      setJiraTestResult({ ok: true, msg: 'Connected to "' + data.name + '" (' + data.key + ')' });
+    } catch (e) { setJiraTestResult({ ok: false, msg: e.message }); }
+    setJiraTesting(false);
+  };
+
+  const saveJira = () => { update({ jira: { ...jiraForm, connected: true } }); };
+  const disconnectJira = () => { update({ jira: null }); };
+
+  const pushStory = async (s) => {
+    if (!hasJira) return;
+    setPushingId(s.id);
+    try {
+      const epic = project.epics.find(e => e.id === s.epicId)?.title;
+      const result = await pushStoryToJira(jira, s, epic);
+      const key = result.key;
+      const url = jira.baseUrl.replace(/\/$/, "") + "/browse/" + key;
+      update({ stories: project.stories.map(x => x.id === s.id ? { ...x, trackerKey: key, trackerUrl: url } : x) });
+    } catch (e) { alert("Jira error: " + e.message); }
+    setPushingId(null);
+  };
+
+  const pushBug = async (b) => {
+    if (!hasJira) return;
+    setPushingId(b.id);
+    try {
+      const result = await pushBugToJira(jira, b);
+      const key = result.key;
+      const url = jira.baseUrl.replace(/\/$/, "") + "/browse/" + key;
+      update({ bugs: project.bugs.map(x => x.id === b.id ? { ...x, trackerKey: key, trackerUrl: url } : x) });
+    } catch (e) { alert("Jira error: " + e.message); }
+    setPushingId(null);
+  };
+
+  const downloadCSV = (content, filename) => {
+    const blob = new Blob([content], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a"); a.href = url; a.download = filename; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportStories = () => {
+    saveUrl();
+    downloadCSV(exportStoriesToCSV(project.stories, project.epics, syncTool), project.name.replace(/\s+/g, "_") + "_stories.csv");
+    setExporting("stories"); setTimeout(() => setExporting(null), 2000);
+  };
+
+  const exportBugs = () => {
+    saveUrl();
+    downloadCSV(exportBugsToCSV(project.bugs, syncTool), project.name.replace(/\s+/g, "_") + "_bugs.csv");
+    setExporting("bugs"); setTimeout(() => setExporting(null), 2000);
+  };
+
+  const handleImportFile = e => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = ev => setImportCSV(ev.target.result);
+    reader.readAsText(file);
+  };
+
+  const runImport = () => setImportResult(matchFromCSV(importCSV, project.stories, project.bugs));
+
+  const applyImport = () => {
+    if (!importResult) return;
+    const su = importResult.updates.filter(u => !u.isBug);
+    const bu = importResult.updates.filter(u => u.isBug);
+    if (su.length) update({ stories: project.stories.map(s => { const m = su.find(u => u.id === s.id); return m ? { ...s, trackerKey: m.key } : s; }) });
+    if (bu.length) update({ bugs: project.bugs.map(b => { const m = bu.find(u => u.id === b.id); return m ? { ...b, trackerKey: m.key } : b; }) });
+    setImportResult({ ...importResult, applied: true });
+  };
+
+  const tabStyle = t => ({
+    padding: "7px 14px", background: tab === t ? "#e8f0fe" : "transparent",
+    border: tab === t ? "1px solid #dfe1e6" : "1px solid transparent",
+    borderRadius: 7, cursor: "pointer", fontSize: 12, fontWeight: tab === t ? 600 : 400,
+    color: tab === t ? "#172b4d" : "#8993a4", fontFamily: "'DM Sans',sans-serif",
+  });
+
+  return (
+    <Modal wide title="Tracker Integration" onClose={onClose}
+      footer={<button className="btn btn-ghost" onClick={onClose}>Close</button>}>
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 20 }}>
+        <button style={tabStyle("jira")}>
+          <span onClick={() => setTab("jira")} style={{ display: "flex", alignItems: "center", gap: 6 }}>
+            <span style={{ width: 8, height: 8, borderRadius: "50%", background: hasJira ? "#36b37e" : "#8993a4" }} />
+            Jira {hasJira ? "(connected)" : "API"}
+          </span>
+        </button>
+        <button style={tabStyle("export")} onClick={() => setTab("export")}>↓ Export CSV</button>
+        <button style={tabStyle("import")} onClick={() => setTab("import")}>↑ Import CSV</button>
+      </div>
+
+      {/* ── JIRA TAB ── */}
+      {tab === "jira" && (
+        <div>
+          {hasJira ? (
+            <div>
+              <div style={{ padding: "12px 14px", background: "rgba(54,179,126,.07)", border: "1px solid rgba(54,179,126,.2)", borderRadius: 8, marginBottom: 20, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div style={{ fontSize: 13, color: "#36b37e", fontWeight: 600 }}>Connected to Jira</div>
+                  <div style={{ fontSize: 12, color: "#8993a4", marginTop: 2 }}>{jira.baseUrl} · Project: {jira.projectKey}</div>
+                </div>
+                <button className="btn btn-danger btn-sm" onClick={disconnectJira}>Disconnect</button>
+              </div>
+
+              <p style={{ fontSize: 13, color: "#8993a4", marginBottom: 16, lineHeight: 1.65 }}>Push individual items directly to Jira. Once pushed, the Jira key is saved and shown on the item.</p>
+
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 11, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 8 }}>Stories</div>
+                {project.stories.length === 0 ? <div style={{ fontSize: 12, color: "#b3bac5" }}>No stories yet</div> :
+                  project.stories.map(s => {
+                    const isPushing = pushingId === s.id;
+                    return (
+                      <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: "1px solid #ebecf0" }}>
+                        <span style={{ flex: 1, fontSize: 12, color: "#344563", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.title}</span>
+                        {s.trackerKey && <a href={s.trackerUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: "#0052cc", fontFamily: "'DM Mono',monospace", textDecoration: "none" }}>{s.trackerKey} ↗</a>}
+                        <button className="btn btn-ghost btn-xs" onClick={() => pushStory(s)} disabled={isPushing || !!s.trackerKey} style={{ flexShrink: 0, color: s.trackerKey ? "#36b37e" : "#8993a4" }}>
+                          {isPushing ? "Pushing..." : s.trackerKey ? <><Check size={10} /> Pushed</> : <><Link size={10} /> Push</>}
+                        </button>
+                      </div>
+                    );
+                  })
+                }
+              </div>
+
+              <div>
+                <div style={{ fontSize: 11, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 8 }}>Bugs</div>
+                {project.bugs.length === 0 ? <div style={{ fontSize: 12, color: "#b3bac5" }}>No bugs yet</div> :
+                  project.bugs.map(b => {
+                    const isPushing = pushingId === b.id;
+                    return (
+                      <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "7px 0", borderBottom: "1px solid #ebecf0" }}>
+                        <span className="tag tag-BUG" style={{ flexShrink: 0, fontSize: 9 }}>BUG</span>
+                        <span style={{ flex: 1, fontSize: 12, color: "#344563", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.title}</span>
+                        {b.trackerKey && <a href={b.trackerUrl} target="_blank" rel="noopener noreferrer" style={{ fontSize: 11, color: "#0052cc", fontFamily: "'DM Mono',monospace", textDecoration: "none" }}>{b.trackerKey} ↗</a>}
+                        <button className="btn btn-ghost btn-xs" onClick={() => pushBug(b)} disabled={isPushing || !!b.trackerKey} style={{ flexShrink: 0, color: b.trackerKey ? "#36b37e" : "#8993a4" }}>
+                          {isPushing ? "Pushing..." : b.trackerKey ? <><Check size={10} /> Pushed</> : <><Link size={10} /> Push</>}
+                        </button>
+                      </div>
+                    );
+                  })
+                }
+              </div>
+            </div>
+          ) : (
+            <div>
+              <div style={{ background: "rgba(232,197,71,.1)", border: "1px solid rgba(232,197,71,.15)", borderRadius: 8, padding: "12px 14px", marginBottom: 18, fontSize: 12, color: "#7a6000", lineHeight: 1.65 }}>
+                API token stays in your browser only — never sent anywhere except your own Jira instance.
+                Generate one at <span style={{ color: "#0052cc" }}>id.atlassian.com → Security → API tokens</span>.
+              </div>
+              <div className="field"><label>Jira Base URL</label><input value={jiraForm.baseUrl} onChange={e => setJiraForm(f => ({ ...f, baseUrl: e.target.value }))} placeholder="https://yourcompany.atlassian.net" /></div>
+              <div className="row">
+                <div className="field"><label>Project Key</label><input value={jiraForm.projectKey} onChange={e => setJiraForm(f => ({ ...f, projectKey: e.target.value.toUpperCase() }))} placeholder="CAB" /></div>
+                <div className="field"><label>Story Points Field</label><input value={jiraForm.spField} onChange={e => setJiraForm(f => ({ ...f, spField: e.target.value }))} placeholder="story_points" /></div>
+              </div>
+              <div className="field"><label>Atlassian Email</label><input value={jiraForm.email} onChange={e => setJiraForm(f => ({ ...f, email: e.target.value }))} placeholder="you@company.com" type="email" /></div>
+              <div className="field"><label>API Token</label><input value={jiraForm.apiToken} onChange={e => setJiraForm(f => ({ ...f, apiToken: e.target.value }))} type="password" placeholder="Your Atlassian API token" /></div>
+              {jiraTestResult && (
+                <div style={{ padding: "10px 14px", borderRadius: 8, background: jiraTestResult.ok ? "rgba(54,179,126,.08)" : "rgba(222,53,11,.06)", border: "1px solid " + (jiraTestResult.ok ? "rgba(54,179,126,.2)" : "rgba(222,53,11,.15)"), fontSize: 13, color: jiraTestResult.ok ? "#36b37e" : "#de350b", marginBottom: 14, display: "flex", alignItems: "center", gap: 8 }}>
+                  {jiraTestResult.ok ? <Check size={13} /> : <AlertCircle size={13} />} {jiraTestResult.msg}
+                </div>
+              )}
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn btn-ghost" onClick={testJira} disabled={jiraTesting || !jiraForm.baseUrl || !jiraForm.email || !jiraForm.apiToken}>{jiraTesting ? "Testing..." : "Test Connection"}</button>
+                <button className="btn btn-primary" onClick={saveJira} disabled={!jiraForm.baseUrl || !jiraForm.projectKey || !jiraForm.email || !jiraForm.apiToken}>Save & Connect</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── EXPORT TAB ── */}
+      {tab === "export" && (
+        <div>
+          <div className="field" style={{ marginBottom: 16 }}>
+            <label>Tool URL <span style={{ color: "#b3bac5", fontWeight: 400, textTransform: "none" }}>(optional — auto-formats the CSV)</span></label>
+            <div style={{ display: "flex", gap: 8 }}>
+              <input value={toolUrl} onChange={e => setToolUrl(e.target.value)} onBlur={saveUrl} placeholder="https://yourcompany.atlassian.net/jira/software/projects/CAB" />
+              {syncTool && <div style={{ display: "flex", alignItems: "center", gap: 6, padding: "0 12px", background: "#f8f9fa", border: "1px solid #dfe1e6", borderRadius: 7, flexShrink: 0 }}><div style={{ width: 8, height: 8, borderRadius: "50%", background: syncTool.color }} /><span style={{ fontSize: 12, color: "#344563", whiteSpace: "nowrap" }}>{syncTool.label}</span></div>}
+            </div>
+          </div>
+          <p style={{ fontSize: 13, color: "#8993a4", marginBottom: 16, lineHeight: 1.65 }}>
+            Download a CSV then use your tracker's native importer.
+            {syncTool?.id === "jira" && <span style={{ display: "block", marginTop: 4, color: "#97a0af" }}>Jira: Project settings → Import → CSV</span>}
+            {syncTool?.id === "linear" && <span style={{ display: "block", marginTop: 4, color: "#97a0af" }}>Linear: Settings → Import → CSV</span>}
+          </p>
+          <div style={{ display: "flex", gap: 12 }}>
+            <div className="card" style={{ flex: 1 }}>
+              <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 14, color: "#172b4d", marginBottom: 6 }}>Stories</div>
+              <div style={{ fontSize: 12, color: "#8993a4", marginBottom: 14 }}>{project.stories.length} stories — description, AC, points, epic</div>
+              <button className="btn btn-primary" style={{ width: "100%" }} onClick={exportStories} disabled={!project.stories.length}>
+                {exporting === "stories" ? <><Check size={13} /> Downloaded!</> : "↓ Export Stories CSV"}
+              </button>
+            </div>
+            <div className="card" style={{ flex: 1 }}>
+              <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 14, color: "#172b4d", marginBottom: 6 }}>Bugs</div>
+              <div style={{ fontSize: 12, color: "#8993a4", marginBottom: 14 }}>{project.bugs.length} bugs — steps, expected, current, suggestions</div>
+              <button className="btn btn-primary" style={{ width: "100%" }} onClick={exportBugs} disabled={!project.bugs.length}>
+                {exporting === "bugs" ? <><Check size={13} /> Downloaded!</> : "↓ Export Bugs CSV"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── IMPORT TAB ── */}
+      {tab === "import" && (
+        <div>
+          <p style={{ fontSize: 13, color: "#8993a4", marginBottom: 16, lineHeight: 1.65 }}>
+            Export a CSV from your tracker and upload it here. We match by title and save the issue keys (e.g. <span style={{ fontFamily: "'DM Mono',monospace", color: "#e8c547" }}>CAB-42</span>) — works with Jira, Linear, GitHub, Shortcut, Azure DevOps.
+          </p>
+          {!importCSV ? (
+            <div>
+              <div onClick={() => fileRef.current?.click()} style={{ border: "2px dashed #c1c7d0", borderRadius: 10, padding: "36px 24px", textAlign: "center", cursor: "pointer", transition: "border-color .15s" }}
+                onMouseEnter={e => e.currentTarget.style.borderColor = "#e8c547"} onMouseLeave={e => e.currentTarget.style.borderColor = "#c1c7d0"}>
+                <div style={{ fontSize: 28, marginBottom: 10 }}>📄</div>
+                <div style={{ fontSize: 14, color: "#344563", fontWeight: 500, marginBottom: 4 }}>Drop CSV here or click to upload</div>
+                <div style={{ fontSize: 12, color: "#97a0af" }}>Needs a "key" column and a "summary" or "title" column</div>
+              </div>
+              <input ref={fileRef} type="file" accept=".csv" style={{ display: "none" }} onChange={handleImportFile} />
+            </div>
+          ) : !importResult ? (
+            <div>
+              <div style={{ padding: "10px 14px", background: "rgba(54,179,126,.07)", border: "1px solid rgba(54,179,126,.2)", borderRadius: 8, fontSize: 13, color: "#36b37e", marginBottom: 14, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>✓ CSV loaded · {importCSV.trim().split("\n").length - 1} rows</span>
+                <button className="btn btn-ghost btn-xs" onClick={() => setImportCSV("")}>Change</button>
+              </div>
+              <button className="btn btn-primary" style={{ width: "100%" }} onClick={runImport}>Match issue keys →</button>
+            </div>
+          ) : (
+            <div>
+              <div style={{ padding: "14px", background: "#f8f9fa", border: "1px solid #dfe1e6", borderRadius: 8, marginBottom: 14 }}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: "#172b4d", marginBottom: 10 }}>
+                  {importResult.error ? <span style={{ color: "#de350b" }}>{importResult.error}</span> : <>{importResult.matched} matched of {importCSV.trim().split("\n").length - 1} rows</>}
+                </div>
+                {importResult.updates.map((u, i) => {
+                  const item = [...project.stories, ...project.bugs].find(x => x.id === u.id);
+                  return (
+                    <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", padding: "5px 0", borderTop: "1px solid #ebecf0" }}>
+                      <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: "#e8c547", minWidth: 70 }}>{u.key}</span>
+                      <span style={{ fontSize: 12, color: "#505f79", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item?.title || "—"}</span>
+                      <span style={{ fontSize: 10, color: "#97a0af" }}>{Math.round(u.score * 100)}%</span>
+                      {u.isBug && <span className="tag tag-BUG" style={{ fontSize: 9 }}>BUG</span>}
+                    </div>
+                  );
+                })}
+              </div>
+              {importResult.applied
+                ? <div style={{ textAlign: "center", padding: "12px", fontSize: 13, color: "#36b37e" }}><Check size={14} style={{ marginRight: 6 }} /> Keys applied</div>
+                : <div style={{ display: "flex", gap: 8 }}>
+                    <button className="btn btn-ghost" style={{ flex: 1 }} onClick={() => { setImportResult(null); setImportCSV(""); }}>Start over</button>
+                    <button className="btn btn-primary" style={{ flex: 1 }} onClick={applyImport} disabled={!importResult.matched}>Apply {importResult.matched} matches</button>
+                  </div>}
+            </div>
+          )}
+        </div>
+      )}
+    </Modal>
+  );
 }
 
 const HOLIDAYS = {
@@ -44,7 +517,7 @@ const HOLIDAYS = {
 
 const DEMO = {
   id: "demo1", name: "Nexus Platform", platform: "Web", type: "Greenfield",
-  industry: "FinTech", teamSize: 8, velocity: 42,
+  industry: "FinTech", teamSize: 8, velocity: 42, designVelocity: 20,
   about: "Internal financial operations and reporting platform for mid-size enterprises.",
   assumptions: ["Users are internal finance staff", "SSO via company IdP", "Data from existing ERP"],
   risks: ["Legacy ERP dependencies", "Aggressive Q3 deadline", "High security requirements"],
@@ -82,137 +555,180 @@ const DEMO = {
   ],
   vacations: [],
   sprints: [],
+  customHolidays: [],
+  jira: null,
   aiRules: ["Use Jira-compatible story format", "Always include at least one AC per story"],
   velocityHistory: [38, 42, 40, 45, 42],
+  mode: "delivery",
+  jira: null, syncUrl: "", customHolidays: [],
+};
+
+const DEMO_DISCOVERY = {
+  id: "demo-disc", name: "Lacoste Mobile Commerce", platform: "Mobile", type: "Discovery",
+  mode: "discovery", clientType: "enterprise", industry: "Retail / Fashion",
+  about: "Lacoste wants to redesign their mobile commerce experience. They have a 60% checkout drop-off rate on mobile and suspect the onboarding and product discovery flows are the root cause. This discovery will map the full mobile journey, identify friction points, and define the MVP scope for a rethink.",
+  assumptions: ["Drop-off is concentrated in the checkout flow", "Users are 25-45 year old existing Lacoste customers", "iOS and Android must be in scope", "Integration with existing Salesforce Commerce Cloud is required"],
+  risks: [{ text: "Legacy commerce platform limits mobile flexibility", source: "initial" }, { text: "Checkout flow tied to 3rd-party payment provider", source: "initial" }, { text: "Limited access to real user data pre-discovery", source: "initial" }],
+  opportunities: [{ text: "Personalization based on purchase history", source: "initial" }, { text: "Loyalty program integration could reduce cart abandonment", source: "initial" }],
+  discoveryPhase: "story-mapping",
+  sessions: [
+    { id: uid(), date: "2025-09-15", title: "Stakeholder Kickoff", participants: "PM, Design Lead, Lacoste CMO, Digital Director", notes: "Reviewed current analytics showing 60% mobile checkout drop-off. CMO confirmed Q1 2026 launch target. Main concern: the redesign must not break existing Salesforce integration.", outputs: { risks: ["Salesforce integration must be preserved"], opportunities: ["Loyalty program not used in mobile yet"], assumptions: ["Users are mostly repeat buyers"], keyDecisions: ["Mobile-first, then desktop"], openQuestions: ["What does the current state architecture look like?"] } },
+  ],
+  backbone: [
+    { id: "b1", stage: "Discovery", description: "User lands on app and discovers products", epics: [{ id: "e1", title: "Onboarding", moscow: "Must", features: [{ id: "f1", title: "Guest browse", moscow: "Must", slice: "mvp" }, { id: "f2", title: "Account creation", moscow: "Must", slice: "mvp" }, { id: "f3", title: "Social login", moscow: "Should", slice: "future" }] }, { id: "e2", title: "Product Discovery", moscow: "Must", features: [{ id: "f4", title: "Search & filters", moscow: "Must", slice: "mvp" }, { id: "f5", title: "AI recommendations", moscow: "Could", slice: "future" }] }] },
+    { id: "b2", stage: "Selection", description: "User browses and selects products", epics: [{ id: "e3", title: "PDP", moscow: "Must", features: [{ id: "f6", title: "Product photos & zoom", moscow: "Must", slice: "mvp" }, { id: "f7", title: "Size guide", moscow: "Must", slice: "mvp" }, { id: "f8", title: "AR try-on", moscow: "Won_t", slice: "future" }] }] },
+    { id: "b3", stage: "Checkout", description: "User purchases", epics: [{ id: "e4", title: "Cart & Payment", moscow: "Must", features: [{ id: "f9", title: "One-page checkout", moscow: "Must", slice: "mvp" }, { id: "f10", title: "Apple/Google Pay", moscow: "Must", slice: "mvp" }, { id: "f11", title: "Saved addresses", moscow: "Should", slice: "mvp" }] }] },
+  ],
+  storyMap: [],
+  flows: ["Guest browse → Product discovery → PDP → Cart → Checkout", "Account creation → Login → Wishlist → Purchase"],
+  personas: [],
+  architectureNotes: "Lacoste mobile app connects to Salesforce Commerce Cloud (SCC) as the commerce backbone. A new React Native app will proxy API calls through an API Gateway layer, enabling gradual migration away from SCC-specific patterns without breaking existing integrations.",
+  nfrs: [{ category: "Performance", requirement: "App launch under 2s, PDP load under 1s on 4G", priority: "Must" }, { category: "Security", requirement: "PCI-DSS compliance for payment flows, OAuth 2.0 for auth", priority: "Must" }, { category: "Availability", requirement: "99.9% uptime, graceful degradation when SCC is slow", priority: "Must" }, { category: "Compliance", requirement: "GDPR compliance for EU users, cookie consent", priority: "Should" }],
+  adrs: [{ title: "React Native for cross-platform mobile", context: "Need iOS and Android with a single codebase and fast iteration", decision: "Use React Native with Expo managed workflow", consequences: "Faster delivery, shared codebase. Trade-off: some native performance limitations for complex animations." }],
+  integrations: [{ system: "Salesforce Commerce Cloud", direction: "in/out", auth: "OAuth 2.0 client credentials", notes: "Product catalog, cart, checkout, order management" }, { system: "Stripe", direction: "in", auth: "API key + webhook secret", notes: "Payment processing, Apple Pay, Google Pay" }],
+  spikes: ["Confirm SCC API rate limits for mobile search volume", "Evaluate React Native performance with 500+ product images"],
+  designResearchPlan: "Research goal: validate that the checkout drop-off is caused by UX friction, not trust or pricing issues.\n\nMethods:\n- 6 moderated usability sessions with existing Lacoste customers (mobile users)\n- Heatmap and session recording review of current app\n- 15-min survey to 200 app users on checkout abandonment reasons\n\nTimeline: Weeks 1-2 research, Week 3 synthesis, Week 4 share-out",
+  designPriorities: [{ flow: "Checkout flow (3-step)", reason: "Root cause of 60% drop-off, highest business impact", week: "Week 1-2", dependencies: "Cart API contract from SCC" }, { flow: "PDP (product detail)", reason: "First point of engagement before cart", week: "Week 2-3", dependencies: "Product media CDN specs" }],
+  designNextSteps: ["Conduct 6 usability sessions on prototype checkout by sprint 2", "Deliver hi-fi mocks for PDP and checkout by end of month 1", "Align with Lacoste brand team on design system tokens"],
+  scenarios: {
+    lean: { name: "Lean", description: "Small focused team, longer timeline. Good for cost-sensitive clients.", roles: [{ role: "Product Manager", fte: 1, monthly: 5000 }, { role: "React Native Dev", fte: 2, monthly: 4500 }, { role: "Product Designer", fte: 0.5, monthly: 4000 }, { role: "QA Engineer", fte: 0.5, monthly: 3500 }], sprintVelocity: 28, mvpSprints: 12, mvpMonths: 6, totalCost: 94500, pros: ["Lower monthly burn", "Tight, focused scope"], cons: ["Slower delivery", "Less capacity for unknowns"] },
+    balanced: { name: "Balanced", description: "Medium team, realistic pace. Recommended for most enterprise projects.", roles: [{ role: "Product Manager", fte: 1, monthly: 5000 }, { role: "React Native Dev", fte: 3, monthly: 4500 }, { role: "Backend Engineer", fte: 1, monthly: 4500 }, { role: "Product Designer", fte: 1, monthly: 4000 }, { role: "QA Engineer", fte: 1, monthly: 3500 }], sprintVelocity: 42, mvpSprints: 8, mvpMonths: 4, totalCost: 132000, pros: ["Balanced speed and quality", "Can absorb scope changes"], cons: ["Higher monthly cost vs. lean"] },
+    accelerated: { name: "Accelerated", description: "Full team, fast delivery. Best when time-to-market is the priority.", roles: [{ role: "Product Manager", fte: 1, monthly: 5000 }, { role: "React Native Dev", fte: 4, monthly: 4500 }, { role: "Backend Engineer", fte: 2, monthly: 4500 }, { role: "Product Designer", fte: 2, monthly: 4000 }, { role: "QA Engineer", fte: 2, monthly: 3500 }, { role: "Tech Lead", fte: 1, monthly: 6000 }], sprintVelocity: 65, mvpSprints: 6, mvpMonths: 3, totalCost: 162000, pros: ["Fastest path to MVP", "Multiple parallel workstreams"], cons: ["Highest burn rate", "Coordination overhead"] },
+  },
+  presentationNotes: "",
+  teamSize: 0, velocity: 0, designVelocity: 0,
+  stakeholders: [], epics: [], stories: [], bugs: [], design: [],
+  team: [], sprints: [], vacations: [], customHolidays: [],
+  jira: null, syncUrl: "", aiRules: [],
 };
 
 const STYLE = `
 @import url('https://fonts.googleapis.com/css2?family=Syne:wght@600;700;800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;1,9..40,400&family=DM+Mono:wght@400;500&display=swap');
 *{box-sizing:border-box;margin:0;padding:0}
-::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#1e2533;border-radius:2px}::-webkit-scrollbar-track{background:transparent}
-body{background:#0d0f14}
-.app{display:flex;height:100vh;background:#0d0f14;color:#eef0f7;font-family:'DM Sans',sans-serif;overflow:hidden;font-size:14px}
-.sbar{width:224px;min-width:224px;background:#080a0d;border-right:1px solid #181f2d;display:flex;flex-direction:column;height:100vh;overflow:hidden}
-.sbar-logo{padding:18px 16px 14px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #181f2d}
+::-webkit-scrollbar{width:4px}::-webkit-scrollbar-thumb{background:#c1c7d0;border-radius:2px}::-webkit-scrollbar-track{background:transparent}
+body{background:#f4f5f7}
+.app{display:flex;height:100vh;background:#f4f5f7;color:#172b4d;font-family:'DM Sans',sans-serif;overflow:hidden;font-size:14px}
+.sbar{width:224px;min-width:224px;background:#ffffff;border-right:1px solid #dfe1e6;display:flex;flex-direction:column;height:100vh;overflow:hidden;box-shadow:1px 0 0 #dfe1e6}
+.sbar-logo{padding:18px 16px 14px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #ebecf0}
 .sbar-logo-mark{width:28px;height:28px;background:#e8c547;border-radius:6px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
-.sbar-logo h2{font-family:'Syne',sans-serif;font-size:14px;font-weight:700;letter-spacing:-.02em;color:#eef0f7}
-.sbar-logo span{color:#5d6a85;font-weight:600}
-.sbar-proj-area{padding:10px 10px;border-bottom:1px solid #181f2d;position:relative}
-.sbar-proj-btn{width:100%;display:flex;align-items:center;gap:8px;background:#111318;border:1px solid #1e2533;border-radius:8px;padding:8px 10px;cursor:pointer;color:#eef0f7;font-size:12px;font-weight:500;font-family:'DM Sans',sans-serif;transition:border-color .15s;text-align:left}
-.sbar-proj-btn:hover{border-color:#2d3a50}
+.sbar-logo h2{font-family:'Syne',sans-serif;font-size:14px;font-weight:700;letter-spacing:-.02em;color:#172b4d}
+.sbar-logo span{color:#8993a4;font-weight:600}
+.sbar-proj-area{padding:10px 10px;border-bottom:1px solid #ebecf0;position:relative}
+.sbar-proj-btn{width:100%;display:flex;align-items:center;gap:8px;background:#f8f9fa;border:1px solid #dfe1e6;border-radius:8px;padding:8px 10px;cursor:pointer;color:#172b4d;font-size:12px;font-weight:500;font-family:'DM Sans',sans-serif;transition:border-color .15s;text-align:left}
+.sbar-proj-btn:hover{border-color:#b3bac5;background:#f1f2f4}
 .sbar-proj-name{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.sbar-proj-tag{font-size:10px;color:#5d6a85;font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:.04em;flex-shrink:0}
-.sbar-dropdown{position:absolute;z-index:200;top:calc(100% - 2px);left:10px;right:10px;background:#111318;border:1px solid #1e2533;border-radius:8px;overflow:hidden;box-shadow:0 12px 32px rgba(0,0,0,.5)}
-.sbar-dropdown-item{padding:9px 12px;cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:space-between;transition:background .12s}
-.sbar-dropdown-item:hover{background:#1a1f2e}
-.sbar-dropdown-item.sel{color:#e8c547}
-.sbar-dropdown-sep{height:1px;background:#181f2d;margin:4px 0}
+.sbar-proj-tag{font-size:10px;color:#8993a4;font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:.04em;flex-shrink:0}
+.sbar-dropdown{position:absolute;z-index:200;top:calc(100% - 2px);left:10px;right:10px;background:#ffffff;border:1px solid #dfe1e6;border-radius:8px;overflow:hidden;box-shadow:0 8px 24px rgba(9,30,66,.15)}
+.sbar-dropdown-item{padding:9px 12px;cursor:pointer;font-size:12px;display:flex;align-items:center;justify-content:space-between;transition:background .12s;color:#172b4d}
+.sbar-dropdown-item:hover{background:#f4f5f7}
+.sbar-dropdown-item.sel{color:#0052cc;background:#e8f0fe}
+.sbar-dropdown-sep{height:1px;background:#ebecf0;margin:4px 0}
 .sbar-nav{flex:1;overflow-y:auto;padding:8px 8px}
-.nav-section-label{font-size:10px;color:#3a4255;font-weight:600;font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:.06em;padding:10px 10px 5px}
-.nav-item{display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:7px;cursor:pointer;font-size:13px;color:#5d6a85;font-weight:400;transition:all .12s;margin-bottom:1px;border:none;background:none;width:100%;text-align:left;font-family:'DM Sans',sans-serif;line-height:1}
-.nav-item:hover{background:#111620;color:#9aaabb}
-.nav-item.active{background:#15192a;color:#eef0f7;font-weight:500}
-.nav-item.active .nav-icon{color:#e8c547}
+.nav-section-label{font-size:10px;color:#b3bac5;font-weight:600;font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:.06em;padding:10px 10px 5px}
+.nav-item{display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:7px;cursor:pointer;font-size:13px;color:#8993a4;font-weight:400;transition:all .12s;margin-bottom:1px;border:none;background:none;width:100%;text-align:left;font-family:'DM Sans',sans-serif;line-height:1}
+.nav-item:hover{background:#f4f5f7;color:#344563}
+.nav-item.active{background:#e8f0fe;color:#0052cc;font-weight:600}
+.nav-item.active .nav-icon{color:#0052cc}
 .nav-icon{flex-shrink:0;opacity:.8}
-.sbar-footer{padding:10px 10px;border-top:1px solid #181f2d}
-.new-proj-btn{width:100%;display:flex;align-items:center;gap:7px;padding:8px 10px;background:rgba(232,197,71,.07);border:1px solid rgba(232,197,71,.18);border-radius:7px;cursor:pointer;color:#e8c547;font-size:12px;font-weight:500;font-family:'DM Sans',sans-serif;transition:all .15s}
-.new-proj-btn:hover{background:rgba(232,197,71,.13);border-color:rgba(232,197,71,.32)}
-.main{flex:1;overflow-y:auto;padding:32px 36px 48px}
+.sbar-footer{padding:10px 10px;border-top:1px solid #ebecf0}
+.new-proj-btn{width:100%;display:flex;align-items:center;gap:7px;padding:8px 10px;background:rgba(232,197,71,.1);border:1px solid rgba(232,197,71,.4);border-radius:7px;cursor:pointer;color:#7a6000;font-size:12px;font-weight:600;font-family:'DM Sans',sans-serif;transition:all .15s}
+.new-proj-btn:hover{background:rgba(232,197,71,.2);border-color:rgba(232,197,71,.6)}
+.main{flex:1;overflow-y:auto;padding:32px 36px 48px;background:#f4f5f7}
 .sec-head{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:28px;gap:16px}
-.sec-title{font-family:'Syne',sans-serif;font-size:22px;font-weight:700;color:#eef0f7;letter-spacing:-.025em;line-height:1.15}
-.sec-sub{font-size:12px;color:#4a5568;margin-top:4px;font-weight:400}
+.sec-title{font-family:'Syne',sans-serif;font-size:22px;font-weight:700;color:#172b4d;letter-spacing:-.025em;line-height:1.15}
+.sec-sub{font-size:12px;color:#97a0af;margin-top:4px;font-weight:400}
 .sec-actions{display:flex;gap:8px;align-items:center;flex-shrink:0}
 .btn{display:inline-flex;align-items:center;gap:6px;border-radius:7px;font-size:13px;font-weight:500;cursor:pointer;transition:all .15s;border:none;font-family:'DM Sans',sans-serif;padding:8px 14px;white-space:nowrap;line-height:1}
-.btn-primary{background:#e8c547;color:#0d0f14}
-.btn-primary:hover{background:#f5d35a;transform:translateY(-1px)}
-.btn-ghost{background:transparent;color:#5d6a85;border:1px solid #1e2533}
-.btn-ghost:hover{background:#111318;color:#eef0f7;border-color:#2d3a50}
-.btn-ai{background:rgba(232,197,71,.08);color:#e8c547;border:1px solid rgba(232,197,71,.2)}
-.btn-ai:hover{background:rgba(232,197,71,.15);border-color:rgba(232,197,71,.38)}
-.btn-danger{background:transparent;color:#ff5757;border:1px solid rgba(255,87,87,.25)}
-.btn-danger:hover{background:rgba(255,87,87,.1)}
+.btn-primary{background:#e8c547;color:#3d2e00}
+.btn-primary:hover{background:#f5d35a;transform:translateY(-1px);box-shadow:0 2px 8px rgba(232,197,71,.4)}
+.btn-ghost{background:transparent;color:#505f79;border:1px solid #dfe1e6}
+.btn-ghost:hover{background:#f4f5f7;color:#172b4d;border-color:#c1c7d0}
+.btn-ai{background:rgba(232,197,71,.1);color:#7a6000;border:1px solid rgba(232,197,71,.4)}
+.btn-ai:hover{background:rgba(232,197,71,.2);border-color:rgba(232,197,71,.6)}
+.btn-danger{background:transparent;color:#de350b;border:1px solid rgba(222,53,11,.25)}
+.btn-danger:hover{background:rgba(222,53,11,.08)}
 .btn-sm{padding:5px 10px;font-size:12px}
 .btn-xs{padding:3px 8px;font-size:11px}
 .btn:disabled{opacity:.45;cursor:not-allowed;transform:none!important}
-.card{background:#111318;border:1px solid #1e2533;border-radius:10px;padding:20px;margin-bottom:12px;transition:border-color .15s}
-.card:hover{border-color:#252d40}
-.card-flat{background:#0d1018;border:1px solid #181f2d;border-radius:8px;padding:14px}
+.card{background:#ffffff;border:1px solid #dfe1e6;border-radius:10px;padding:20px;margin-bottom:12px;transition:border-color .15s;box-shadow:0 1px 2px rgba(9,30,66,.06)}
+.card:hover{border-color:#b3bac5;box-shadow:0 2px 8px rgba(9,30,66,.08)}
+.card-flat{background:#f8f9fa;border:1px solid #ebecf0;border-radius:8px;padding:14px}
 .stat-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;margin-bottom:24px}
-.stat-card{background:#111318;border:1px solid #1e2533;border-radius:10px;padding:16px 18px}
-.stat-num{font-family:'Syne',sans-serif;font-size:32px;font-weight:700;color:#eef0f7;line-height:1;letter-spacing:-.02em}
-.stat-label{font-size:11px;color:#4a5568;margin-top:5px;font-weight:500;text-transform:uppercase;letter-spacing:.05em}
+.stat-card{background:#ffffff;border:1px solid #dfe1e6;border-radius:10px;padding:16px 18px;box-shadow:0 1px 2px rgba(9,30,66,.06)}
+.stat-num{font-family:'Syne',sans-serif;font-size:32px;font-weight:700;color:#172b4d;line-height:1;letter-spacing:-.02em}
+.stat-label{font-size:11px;color:#97a0af;margin-top:5px;font-weight:500;text-transform:uppercase;letter-spacing:.05em}
 .stat-hint{font-size:11px;margin-top:6px;font-weight:500}
 .tag{display:inline-flex;align-items:center;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:600;font-family:'DM Mono',monospace;letter-spacing:.04em;white-space:nowrap;line-height:1.5}
-.tag-FE{background:#0c2218;color:#3be8a8}
-.tag-BE{background:#0c1828;color:#5ba4f5}
-.tag-FS{background:#180c28;color:#c57bff}
-.tag-Mobile{background:#221808;color:#e8c547}
-.tag-QA{background:#0e1e28;color:#38bdf8}
-.tag-Designer{background:#1a0c1a;color:#ff8ec7}
-.tag-BUG{background:#220c0c;color:#ff5757}
-.tag-Design{background:#1a0c1a;color:#ff8ec7}
-.tag-accent{background:rgba(232,197,71,.1);color:#e8c547}
-.tag-muted{background:#181f2d;color:#5d6a85}
-.tag-green{background:rgba(59,232,168,.1);color:#3be8a8}
-.badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:4px;font-size:10px;font-weight:600;font-family:'DM Mono',monospace;padding:0 4px;background:#181f2d;color:#5d6a85}
-.badge-accent{background:rgba(232,197,71,.12);color:#e8c547}
-.divider{height:1px;background:#1e2533;margin:16px 0}
+.tag-FE{background:#e3fcef;color:#00632b}
+.tag-BE{background:#e6f0ff;color:#0747a6}
+.tag-FS{background:#f3e6ff;color:#5b21b6}
+.tag-Mobile{background:#fff8e1;color:#7a5c00}
+.tag-QA{background:#e6f7ff;color:#0055b3}
+.tag-Designer{background:#fff0f6;color:#991b5b}
+.tag-BUG{background:#ffebe6;color:#bf2600}
+.tag-Design{background:#fff0f6;color:#991b5b}
+.tag-accent{background:rgba(232,197,71,.15);color:#7a6000}
+.tag-muted{background:#f1f2f4;color:#6b778c}
+.tag-green{background:#e3fcef;color:#00632b}
+.badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:4px;font-size:10px;font-weight:600;font-family:'DM Mono',monospace;padding:0 4px;background:#f1f2f4;color:#6b778c}
+.badge-accent{background:rgba(232,197,71,.15);color:#7a6000}
+.divider{height:1px;background:#ebecf0;margin:16px 0}
 .row{display:flex;gap:12px}
 .row>.field{flex:1;min-width:0}
 .field{margin-bottom:14px}
-label{font-size:11px;color:#4a5568;font-weight:600;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em}
-input,textarea,select{background:#0d1018;border:1px solid #1e2533;color:#eef0f7;border-radius:7px;padding:8px 12px;font-size:13px;font-family:'DM Sans',sans-serif;outline:none;width:100%;transition:border-color .15s;line-height:1.4}
-input:focus,textarea:focus,select:focus{border-color:#e8c547;box-shadow:0 0 0 3px rgba(232,197,71,.08)}
-select option{background:#111318}
+label{font-size:11px;color:#6b778c;font-weight:600;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:.04em}
+input,textarea,select{background:#ffffff;border:2px solid #dfe1e6;color:#172b4d;border-radius:7px;padding:8px 12px;font-size:13px;font-family:'DM Sans',sans-serif;outline:none;width:100%;transition:border-color .15s;line-height:1.4}
+input:focus,textarea:focus,select:focus{border-color:#4c9aff;box-shadow:0 0 0 2px rgba(76,154,255,.2)}
+select option{background:#ffffff;color:#172b4d}
 textarea{resize:vertical;min-height:70px}
-.modal-ov{position:fixed;inset:0;background:rgba(0,0,0,.75);display:flex;align-items:center;justify-content:center;z-index:500;backdrop-filter:blur(3px)}
-.modal{background:#111318;border:1px solid #252d40;border-radius:14px;width:620px;max-width:94vw;max-height:90vh;overflow-y:auto;box-shadow:0 24px 64px rgba(0,0,0,.65)}
+.modal-ov{position:fixed;inset:0;background:rgba(9,30,66,.55);display:flex;align-items:center;justify-content:center;z-index:500;backdrop-filter:blur(2px)}
+.modal{background:#ffffff;border:1px solid #dfe1e6;border-radius:14px;width:620px;max-width:94vw;max-height:90vh;overflow-y:auto;box-shadow:0 20px 60px rgba(9,30,66,.2)}
 .modal-wide{width:780px}
-.modal-hd{display:flex;align-items:center;justify-content:space-between;padding:20px 24px 16px;border-bottom:1px solid #1e2533;position:sticky;top:0;background:#111318;z-index:1}
-.modal-hd h3{font-family:'Syne',sans-serif;font-size:16px;font-weight:700;color:#eef0f7;letter-spacing:-.02em}
+.modal-hd{display:flex;align-items:center;justify-content:space-between;padding:20px 24px 16px;border-bottom:1px solid #ebecf0;position:sticky;top:0;background:#ffffff;z-index:1}
+.modal-hd h3{font-family:'Syne',sans-serif;font-size:16px;font-weight:700;color:#172b4d;letter-spacing:-.02em}
 .modal-bd{padding:20px 24px}
-.modal-ft{padding:14px 24px;border-top:1px solid #1e2533;display:flex;justify-content:flex-end;gap:8px;position:sticky;bottom:0;background:#111318}
-.icon-btn{background:transparent;border:none;cursor:pointer;color:#4a5568;padding:5px;border-radius:5px;display:inline-flex;align-items:center;transition:color .12s}
-.icon-btn:hover{color:#eef0f7}
+.modal-ft{padding:14px 24px;border-top:1px solid #ebecf0;display:flex;justify-content:flex-end;gap:8px;position:sticky;bottom:0;background:#ffffff}
+.icon-btn{background:transparent;border:none;cursor:pointer;color:#97a0af;padding:5px;border-radius:5px;display:inline-flex;align-items:center;transition:color .12s}
+.icon-btn:hover{color:#172b4d;background:#f1f2f4}
 .empty{display:flex;flex-direction:column;align-items:center;justify-content:center;padding:52px 24px;text-align:center}
-.empty-ico{margin-bottom:14px;opacity:.25}
-.empty h3{font-size:14px;font-weight:600;color:#5d6a85;margin-bottom:5px}
-.empty p{font-size:12px;color:#3a4255}
+.empty-ico{margin-bottom:14px;opacity:.2}
+.empty h3{font-size:14px;font-weight:600;color:#8993a4;margin-bottom:5px}
+.empty p{font-size:12px;color:#b3bac5}
 .ai-bubble{border-radius:10px;padding:12px 14px;margin-bottom:8px;font-size:13px;line-height:1.7;max-width:84%;white-space:pre-wrap;word-break:break-word}
-.ai-bubble-bot{background:#181f2d;color:#c8d4e8;margin-right:auto;border-bottom-left-radius:3px;border:1px solid #1e2533}
-.ai-bubble-user{background:#e8c547;color:#0d0f14;margin-left:auto;border-bottom-right-radius:3px;font-weight:500}
+.ai-bubble-bot{background:#f4f5f7;color:#344563;margin-right:auto;border-bottom-left-radius:3px;border:1px solid #ebecf0}
+.ai-bubble-user{background:#e8c547;color:#3d2e00;margin-left:auto;border-bottom-right-radius:3px;font-weight:500}
 .ai-typing{display:inline-flex;align-items:center;gap:4px;padding:8px 12px}
-.ai-dot{width:5px;height:5px;border-radius:50%;background:#5d6a85;animation:bounce 1.2s infinite}
+.ai-dot{width:5px;height:5px;border-radius:50%;background:#b3bac5;animation:bounce 1.2s infinite}
 .ai-dot:nth-child(2){animation-delay:.2s}
 .ai-dot:nth-child(3){animation-delay:.4s}
 @keyframes bounce{0%,80%,100%{transform:translateY(0)}40%{transform:translateY(-6px)}}
 .chips{display:flex;gap:6px;flex-wrap:wrap}
-.chip{padding:3px 10px;background:#181f2d;border:1px solid #252d40;border-radius:20px;font-size:11px;color:#7080a0}
-.progress-bar{height:3px;background:#1e2533;border-radius:2px;overflow:hidden;margin-top:8px}
+.chip{padding:3px 10px;background:#f1f2f4;border:1px solid #dfe1e6;border-radius:20px;font-size:11px;color:#6b778c}
+.progress-bar{height:3px;background:#ebecf0;border-radius:2px;overflow:hidden;margin-top:8px}
 .progress-fill{height:100%;background:linear-gradient(90deg,#e8c547,#f5d35a);border-radius:2px}
-.ac-block{background:#0d1018;border:1px solid #181f2d;border-radius:8px;padding:12px 14px;margin-bottom:8px}
+.ac-block{background:#f8f9fa;border:1px solid #ebecf0;border-radius:8px;padding:12px 14px;margin-bottom:8px}
 .ac-row{margin-bottom:8px}
-.ac-lbl{font-size:10px;color:#4a5568;font-weight:600;font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px}
-.ac-val{font-size:12px;color:#9aaabb;line-height:1.5}
+.ac-lbl{font-size:10px;color:#97a0af;font-weight:600;font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px}
+.ac-val{font-size:12px;color:#505f79;line-height:1.5}
 .pts-row{display:inline-flex;gap:6px;align-items:center}
 .pts-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:5px;font-size:11px;font-family:'DM Mono',monospace}
-.pts-ai{background:rgba(232,197,71,.08);color:#e8c547;border:1px solid rgba(232,197,71,.18)}
-.pts-team{background:rgba(59,232,168,.08);color:#3be8a8;border:1px solid rgba(59,232,168,.18)}
-.pts-empty{background:#181f2d;color:#5d6a85;border:1px solid #1e2533}
+.pts-ai{background:rgba(232,197,71,.12);color:#7a6000;border:1px solid rgba(232,197,71,.3)}
+.pts-team{background:#e3fcef;color:#00632b;border:1px solid #abf5d1}
+.pts-empty{background:#f1f2f4;color:#8993a4;border:1px solid #dfe1e6}
 .step-dots{display:flex;gap:5px;margin-bottom:20px}
-.step-dot{width:6px;height:6px;border-radius:50%;background:#1e2533;transition:background .2s}
+.step-dot{width:6px;height:6px;border-radius:50%;background:#dfe1e6;transition:background .2s}
 .step-dot.on{background:#e8c547}
 .influence-H{color:#e8c547}
-.influence-M{color:#5ba4f5}
-.influence-L{color:#4a5568}
-.sprint-lane{background:#0d1018;border:1px solid #181f2d;border-radius:10px;padding:16px;min-height:120px;flex:1}
-.sprint-lane-title{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#4a5568;margin-bottom:12px;font-family:'DM Mono',monospace}
-.sprint-item{background:#111318;border:1px solid #1e2533;border-radius:7px;padding:10px 12px;margin-bottom:7px;cursor:grab;transition:border-color .12s}
-.sprint-item:hover{border-color:#2d3a50}
-.health-row{display:flex;align-items:center;gap:6px;font-size:12px;color:#7080a0;margin-bottom:6px}
-.dot-green{width:7px;height:7px;border-radius:50%;background:#3be8a8;flex-shrink:0}
+.influence-M{color:#0052cc}
+.influence-L{color:#97a0af}
+.sprint-lane{background:#f8f9fa;border:1px solid #dfe1e6;border-radius:10px;padding:16px;min-height:120px;flex:1}
+.sprint-lane-title{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:#97a0af;margin-bottom:12px;font-family:'DM Mono',monospace}
+.sprint-item{background:#ffffff;border:1px solid #dfe1e6;border-radius:7px;padding:10px 12px;margin-bottom:7px;cursor:pointer;transition:all .12s;box-shadow:0 1px 2px rgba(9,30,66,.04)}
+.sprint-item:hover{border-color:#b3bac5;box-shadow:0 2px 6px rgba(9,30,66,.1)}
+.health-row{display:flex;align-items:center;gap:6px;font-size:12px;color:#6b778c;margin-bottom:6px}
+.dot-green{width:7px;height:7px;border-radius:50%;background:#36b37e;flex-shrink:0}
 .dot-yellow{width:7px;height:7px;border-radius:50%;background:#e8c547;flex-shrink:0}
-.dot-red{width:7px;height:7px;border-radius:50%;background:#ff5757;flex-shrink:0}
+.dot-red{width:7px;height:7px;border-radius:50%;background:#de350b;flex-shrink:0}
 .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 @media(max-width:700px){.two-col{grid-template-columns:1fr}.sbar{display:none}.stat-grid{grid-template-columns:1fr 1fr}}
 `;
@@ -269,9 +785,9 @@ export default function App() {
   const [pid, setPid] = useState(null);
   const [section, setSection] = useState("overview");
   const [showNew, setShowNew] = useState(false);
+  const [showSync, setShowSync] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Load projects from Supabase on mount
   useEffect(() => {
     (async () => {
       const { data, error } = await supabase
@@ -283,11 +799,15 @@ export default function App() {
         const projs = data.map(row => row.data);
         setProjects(projs);
         setPid(projs[0].id);
+        setSection(projs[0].mode === "discovery" ? "d-overview" : "overview");
       } else {
-        // First run — seed demo project
-        await supabase.from("projects").insert({ id: DEMO.id, data: DEMO });
-        setProjects([DEMO]);
+        await supabase.from("projects").insert([
+          { id: DEMO.id, data: DEMO },
+          { id: DEMO_DISCOVERY.id, data: DEMO_DISCOVERY },
+        ]);
+        setProjects([DEMO, DEMO_DISCOVERY]);
         setPid(DEMO.id);
+        setSection("overview");
       }
       setLoading(false);
     })();
@@ -305,12 +825,14 @@ export default function App() {
     await supabase.from("projects").insert({ id: p.id, data: p });
     setProjects(ps => [...ps, p]);
     setPid(p.id);
-    setSection("overview");
+    setSection(p.mode === "discovery" ? "d-overview" : "overview");
     setShowNew(false);
   }, []);
 
-  const sections = {
-    overview: <Overview project={project} setSection={setSection} />,
+  const isDiscovery = project?.mode === "discovery";
+
+  const deliverySections = {
+    overview: <Overview project={project} setSection={setSection} onSync={() => setShowSync(true)} />,
     stakeholders: <StakeholdersSection project={project} update={update} />,
     personas: <PersonasSection project={project} update={update} />,
     epics: <EpicsSection project={project} update={update} setSection={setSection} />,
@@ -321,6 +843,20 @@ export default function App() {
     sprint: <SprintSection project={project} update={update} />,
     ai: <AISection project={project} update={update} />,
   };
+
+  const discoverySections = {
+    "d-overview": <DiscoveryOverview project={project} update={update} setSection={setSection} />,
+    "d-meetings": <DiscoveryMeetingPrep project={project} update={update} />,
+    "d-sessions": <DiscoverySessions project={project} update={update} />,
+    "d-storymap": <StoryMappingSection project={project} update={update} />,
+    "d-planning": <DiscoveryPlanning project={project} update={update} />,
+    "d-design": <DiscoveryDesign project={project} update={update} />,
+    "d-team": <TeamEstimation project={project} update={update} />,
+    "d-presentation": <DiscoveryPresentation project={project} update={update}
+      onGraduate={() => { update({ mode: "delivery" }); setSection("overview"); }} />,
+  };
+
+  const sections = isDiscovery ? discoverySections : deliverySections;
 
   if (loading) {
     return (
@@ -339,22 +875,27 @@ export default function App() {
   return (
     <div className="app">
       <style>{STYLE}</style>
-      <Sidebar projects={projects} pid={pid} setPid={id => { setPid(id); setSection("overview"); }}
-        section={section} setSection={setSection} onNew={() => setShowNew(true)} />
+      <Sidebar projects={projects} pid={pid} setPid={id => { setPid(id); setSection(projects.find(p => p.id === id)?.mode === "discovery" ? "d-overview" : "overview"); }}
+        section={section} setSection={setSection} onNew={() => setShowNew(true)}
+        jiraConnected={!!project?.jira?.connected} syncTool={detectTool(project?.syncUrl)} onSync={() => setShowSync(true)}
+        isDiscovery={isDiscovery} />
       <main className="main">{project && sections[section]}</main>
       {showNew && (
         <NewProjectModal onClose={() => setShowNew(false)} onCreate={handleCreate} />
+      )}
+      {showSync && project && (
+        <SyncModal project={project} update={update} onClose={() => setShowSync(false)} />
       )}
     </div>
   );
 }
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
-function Sidebar({ projects, pid, setPid, section, setSection, onNew }) {
+function Sidebar({ projects, pid, setPid, section, setSection, onNew, jiraConnected, syncTool, onSync, isDiscovery }) {
   const [open, setOpen] = useState(false);
   const proj = projects.find(p => p.id === pid);
 
-  const navItems = [
+  const deliveryNav = [
     { id: "overview", label: "Overview", Icon: LayoutDashboard },
     { id: "stakeholders", label: "Stakeholders", Icon: Users },
     { id: "personas", label: "Personas", Icon: User },
@@ -367,11 +908,25 @@ function Sidebar({ projects, pid, setPid, section, setSection, onNew }) {
     { id: "ai", label: "AI Colleague", Icon: Bot },
   ];
 
+  const discoveryNav = [
+    { id: "d-overview", label: "Overview", Icon: Compass, section: null },
+    { id: "d-meetings", label: "Meeting Prep", Icon: ClipboardList, section: "DISCOVERY" },
+    { id: "d-sessions", label: "Sessions & Outputs", Icon: FileText, section: null },
+    { id: "d-storymap", label: "Story Mapping", Icon: Map, section: "MAPPING" },
+    { id: "d-planning", label: "Tech Planning", Icon: Cpu, section: "PLANNING" },
+    { id: "d-design", label: "Design Planning", Icon: Palette, section: null },
+    { id: "d-team", label: "Team & Estimation", Icon: BarChart2, section: "DELIVERY" },
+    { id: "d-presentation", label: "Client Presentation", Icon: Presentation, section: null },
+  ];
+
+  const navItems = isDiscovery ? discoveryNav : deliveryNav;
+  let lastSection = null;
+
   return (
     <div className="sbar">
       <div className="sbar-logo">
         <div className="sbar-logo-mark">
-          <Zap size={14} color="#0d0f14" strokeWidth={2.5} />
+          <Zap size={14} color="#f4f5f7" strokeWidth={2.5} />
         </div>
         <h2>Product<span>OS</span></h2>
       </div>
@@ -379,14 +934,17 @@ function Sidebar({ projects, pid, setPid, section, setSection, onNew }) {
         <button className="sbar-proj-btn" onClick={() => setOpen(o => !o)}>
           <span className="sbar-proj-name">{proj?.name || "Select project"}</span>
           <span className="sbar-proj-tag">{proj?.platform}</span>
-          <ChevronDown size={12} color="#5d6a85" />
+          <ChevronDown size={12} color="#8993a4" />
         </button>
         {open && (
           <div className="sbar-dropdown">
             {projects.map(p => (
               <div key={p.id} className={`sbar-dropdown-item${p.id === pid ? " sel" : ""}`}
                 onClick={() => { setPid(p.id); setOpen(false); }}>
-                <span>{p.name}</span>
+                <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                  {p.mode === "discovery" && <span style={{ fontSize: 9, fontWeight: 700, color: "#7a6000", background: "#fff8e1", padding: "1px 5px", borderRadius: 3, fontFamily: "'DM Mono',monospace" }}>DISC</span>}
+                  <span>{p.name}</span>
+                </div>
                 {p.id === pid && <Check size={12} />}
               </div>
             ))}
@@ -398,29 +956,47 @@ function Sidebar({ projects, pid, setPid, section, setSection, onNew }) {
         )}
       </div>
       <nav className="sbar-nav">
-        {navItems.map(({ id, label, Icon }) => (
-          <button key={id} className={`nav-item${section === id ? " active" : ""}`}
-            onClick={() => setSection(id)}>
-            <span className="nav-icon"><Icon size={14} /></span>
-            {label}
-          </button>
-        ))}
+        {isDiscovery && (
+          <div style={{ padding: "6px 10px 2px", marginBottom: 2 }}>
+            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: "#e8c547", fontFamily: "'DM Mono',monospace", background: "rgba(232,197,71,.12)", padding: "2px 7px", borderRadius: 4 }}>Discovery Mode</span>
+          </div>
+        )}
+        {navItems.map(({ id, label, Icon, section: sectionLabel }) => {
+          const showLabel = sectionLabel && sectionLabel !== lastSection;
+          if (showLabel) lastSection = sectionLabel;
+          return (
+            <div key={id}>
+              {showLabel && <div className="nav-section-label">{sectionLabel}</div>}
+              <button className={`nav-item${section === id ? " active" : ""}`} onClick={() => setSection(id)}>
+                <span className="nav-icon"><Icon size={14} /></span>
+                {label}
+              </button>
+            </div>
+          );
+        })}
       </nav>
       <div className="sbar-footer">
         <button className="new-proj-btn" onClick={onNew}>
           <Plus size={13} /> New Project
         </button>
+        {!isDiscovery && (
+          <button onClick={onSync} style={{ width: "100%", display: "flex", alignItems: "center", gap: 7, padding: "7px 10px", background: jiraConnected ? "rgba(54,179,126,.07)" : syncTool ? "rgba(0,82,204,.06)" : "transparent", border: "1px solid " + (jiraConnected ? "rgba(54,179,126,.2)" : syncTool ? "rgba(0,82,204,.12)" : "#dfe1e6"), borderRadius: 7, cursor: "pointer", color: jiraConnected ? "#36b37e" : syncTool ? "#0052cc" : "#97a0af", fontSize: 12, fontWeight: 500, fontFamily: "'DM Sans',sans-serif", marginTop: 6, transition: "all .15s" }}>
+            <Link size={12} />
+            {jiraConnected ? "Jira connected" : syncTool ? syncTool.label + " linked" : "Sync with tracker"}
+            {(jiraConnected || syncTool) && <span style={{ marginLeft: "auto", width: 6, height: 6, borderRadius: "50%", background: jiraConnected ? "#36b37e" : syncTool?.color, flexShrink: 0 }} />}
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
 // ─── Overview ─────────────────────────────────────────────────────────────────
-function Overview({ project, setSection }) {
+function Overview({ project, setSection, onSync }) {
   const openBugs = project.bugs.length;
   const totalStories = project.stories.length;
   const donePct = Math.round((project.stories.filter(s => s.teamPts).length / Math.max(totalStories, 1)) * 100);
-  const totalEpicPts = project.epics.reduce((a, e) => a + e.stories * 5, 0);
+  const syncTool = detectTool(project.syncUrl);
 
   return (
     <div>
@@ -432,6 +1008,10 @@ function Overview({ project, setSection }) {
         <div className="sec-actions">
           <span className="tag tag-accent">{project.platform}</span>
           <span className="tag tag-muted">{project.type}</span>
+          <button onClick={onSync} style={{ display: "inline-flex", alignItems: "center", gap: 6, padding: "6px 12px", borderRadius: 7, border: syncTool ? `1px solid ${syncTool.color}40` : "1px solid #dfe1e6", background: syncTool ? "rgba(54,179,126,.07)" : "transparent", cursor: "pointer", fontSize: 12, color: syncTool ? "#36b37e" : "#8993a4", fontFamily: "'DM Sans',sans-serif", fontWeight: 500 }}>
+            <Link size={12} />
+            {syncTool ? syncTool.label + " linked" : "Sync with tracker"}
+          </button>
         </div>
       </div>
 
@@ -439,57 +1019,57 @@ function Overview({ project, setSection }) {
         <div className="stat-card">
           <div className="stat-num">{project.velocity}</div>
           <div className="stat-label">Velocity</div>
-          <div className="stat-hint" style={{ color: "#3be8a8" }}>pts / sprint avg</div>
+          <div className="stat-hint" style={{ color: "#36b37e" }}>pts / sprint avg</div>
         </div>
         <div className="stat-card">
           <div className="stat-num">{project.epics.length}</div>
           <div className="stat-label">Epics</div>
-          <div className="stat-hint" style={{ color: "#5ba4f5" }}>{totalStories} stories total</div>
+          <div className="stat-hint" style={{ color: "#0052cc" }}>{totalStories} stories total</div>
         </div>
         <div className="stat-card">
           <div className="stat-num">{openBugs}</div>
           <div className="stat-label">Open Bugs</div>
-          <div className="stat-hint" style={{ color: openBugs > 2 ? "#ff5757" : "#3be8a8" }}>{openBugs > 0 ? "Needs attention" : "All clear"}</div>
+          <div className="stat-hint" style={{ color: openBugs > 2 ? "#de350b" : "#36b37e" }}>{openBugs > 0 ? "Needs attention" : "All clear"}</div>
         </div>
         <div className="stat-card">
           <div className="stat-num">{project.team.length || project.teamSize}</div>
           <div className="stat-label">Team Size</div>
-          <div className="stat-hint" style={{ color: "#5d6a85" }}>{project.team.length ? `${project.team.length} members added` : "No members yet"}</div>
+          <div className="stat-hint" style={{ color: "#8993a4" }}>{project.team.length ? `${project.team.length} members added` : "No members yet"}</div>
         </div>
       </div>
 
       <div className="two-col" style={{ marginBottom: 16 }}>
         <div className="card">
-          <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 13, color: "#eef0f7", marginBottom: 12 }}>Project Health</div>
+          <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 13, color: "#172b4d", marginBottom: 12 }}>Project Health</div>
           <div className="health-row"><div className="dot-green" /> Sprints on track</div>
           <div className="health-row"><div className={openBugs > 2 ? "dot-red" : "dot-yellow"} /> {openBugs} open bugs</div>
           <div className="health-row"><div className="dot-green" /> {project.stakeholders.length} stakeholders mapped</div>
           <div className="health-row"><div className={project.personas.length ? "dot-green" : "dot-yellow"} /> {project.personas.length} persona{project.personas.length !== 1 ? "s" : ""} defined</div>
           <div className="divider" style={{ margin: "12px 0" }} />
-          <div style={{ fontSize: 11, color: "#4a5568", marginBottom: 5, fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em" }}>Story coverage</div>
+          <div style={{ fontSize: 11, color: "#97a0af", marginBottom: 5, fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em" }}>Story coverage</div>
           <div className="progress-bar"><div className="progress-fill" style={{ width: `${donePct}%` }} /></div>
-          <div style={{ fontSize: 11, color: "#5d6a85", marginTop: 5 }}>{donePct}% estimated</div>
+          <div style={{ fontSize: 11, color: "#8993a4", marginTop: 5 }}>{donePct}% estimated</div>
         </div>
         <div className="card">
-          <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 13, color: "#eef0f7", marginBottom: 12 }}>About</div>
-          <p style={{ fontSize: 13, color: "#8090a8", lineHeight: 1.65, marginBottom: 12 }}>{project.about}</p>
-          <div style={{ fontSize: 11, color: "#4a5568", marginBottom: 6, fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em" }}>Key Assumptions</div>
+          <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 13, color: "#172b4d", marginBottom: 12 }}>About</div>
+          <p style={{ fontSize: 13, color: "#505f79", lineHeight: 1.65, marginBottom: 12 }}>{project.about}</p>
+          <div style={{ fontSize: 11, color: "#97a0af", marginBottom: 6, fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em" }}>Key Assumptions</div>
           <div className="chips">
             {project.assumptions.map((a, i) => <span key={i} className="chip">{a}</span>)}
           </div>
-          <div style={{ fontSize: 11, color: "#4a5568", margin: "10px 0 6px", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em" }}>Risks</div>
+          <div style={{ fontSize: 11, color: "#97a0af", margin: "10px 0 6px", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em" }}>Risks</div>
           <div className="chips">
-            {project.risks.map((r, i) => <span key={i} className="chip" style={{ borderColor: "rgba(255,87,87,.2)", color: "#ff8080" }}>{r}</span>)}
+            {project.risks.map((r, i) => <span key={i} className="chip" style={{ borderColor: "rgba(222,53,11,.15)", color: "#de350b" }}>{r}</span>)}
           </div>
         </div>
       </div>
 
       <div className="card">
-        <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 13, color: "#eef0f7", marginBottom: 14 }}>Epics at a glance</div>
+        <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 13, color: "#172b4d", marginBottom: 14 }}>Epics at a glance</div>
         {project.epics.map(e => (
-          <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0", borderBottom: "1px solid #181f2d" }}>
-            <Layers size={13} color="#5d6a85" style={{ flexShrink: 0 }} />
-            <span style={{ flex: 1, fontSize: 13, color: "#c8d4e8" }}>{e.title}</span>
+          <div key={e.id} style={{ display: "flex", alignItems: "center", gap: 12, padding: "8px 0", borderBottom: "1px solid #ebecf0" }}>
+            <Layers size={13} color="#8993a4" style={{ flexShrink: 0 }} />
+            <span style={{ flex: 1, fontSize: 13, color: "#344563" }}>{e.title}</span>
             <span className="badge badge-accent">{e.stories}</span>
             <button className="btn btn-ghost btn-xs" onClick={() => setSection("stories")}>
               Stories <ChevronRight size={11} />
@@ -538,12 +1118,12 @@ function StakeholdersSection({ project, update }) {
       ) : (
         project.stakeholders.map(s => (
           <div key={s.id} className="card" style={{ display: "flex", alignItems: "flex-start", gap: 16 }}>
-            <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#181f2d", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 13, color: "#e8c547", flexShrink: 0 }}>
+            <div style={{ width: 36, height: 36, borderRadius: "50%", background: "#ebecf0", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 13, color: "#e8c547", flexShrink: 0 }}>
               {s.name.split(" ").map(n => n[0]).join("").slice(0, 2)}
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4 }}>
-                <span style={{ fontWeight: 600, fontSize: 14, color: "#eef0f7" }}>{s.name}</span>
+                <span style={{ fontWeight: 600, fontSize: 14, color: "#172b4d" }}>{s.name}</span>
                 <span className="tag tag-muted">{s.role}</span>
                 <span className={`tag influence-${s.influence[0]}`} style={{ background: "transparent", fontSize: 11, fontFamily: "'DM Mono',monospace" }}>
                   ↑ {s.influence}
@@ -552,7 +1132,7 @@ function StakeholdersSection({ project, update }) {
               <div style={{ display: "flex", gap: 8, marginBottom: s.notes ? 8 : 0 }}>
                 <span className="tag tag-muted">{s.decision}</span>
               </div>
-              {s.notes && <p style={{ fontSize: 12, color: "#7080a0", lineHeight: 1.5 }}>{s.notes}</p>}
+              {s.notes && <p style={{ fontSize: 12, color: "#6b778c", lineHeight: 1.5 }}>{s.notes}</p>}
             </div>
             <div style={{ display: "flex", gap: 4 }}>
               <button className="icon-btn" onClick={() => edit(s)}><Edit2 size={13} /></button>
@@ -780,17 +1360,17 @@ Rules:
           {project.personas.map(p => (
             <div key={p.id} className="card">
               <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
-                <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 15, color: "#eef0f7" }}>{p.role}</div>
+                <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 15, color: "#172b4d" }}>{p.role}</div>
                 <div style={{ display: "flex", gap: 4 }}>
                   <button className="icon-btn" onClick={() => openEdit(p)}><Edit2 size={13} /></button>
                   <button className="icon-btn" onClick={() => del(p.id)}><Trash2 size={13} /></button>
                 </div>
               </div>
-              <p style={{ fontSize: 12, color: "#8090a8", lineHeight: 1.65, marginBottom: 10 }}>{p.description}</p>
+              <p style={{ fontSize: 12, color: "#505f79", lineHeight: 1.65, marginBottom: 10 }}>{p.description}</p>
               <div className="divider" style={{ margin: "8px 0" }} />
-              {[["Goals", p.goals, "#3be8a8"], ["Pain Points", p.painPoints, "#ff8080"], ["Behaviors", p.behaviors, "#8090a8"]].map(([k, v, c]) => v && (
+              {[["Goals", p.goals, "#36b37e"], ["Pain Points", p.painPoints, "#de350b"], ["Behaviors", p.behaviors, "#505f79"]].map(([k, v, c]) => v && (
                 <div key={k} style={{ marginBottom: 8 }}>
-                  <div style={{ fontSize: 10, color: "#4a5568", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 3 }}>{k}</div>
+                  <div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 3 }}>{k}</div>
                   <div style={{ fontSize: 12, color: c, lineHeight: 1.55 }}>{v}</div>
                 </div>
               ))}
@@ -807,7 +1387,7 @@ Rules:
               <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
                 {suggestError
                   ? <button className="btn btn-ai" onClick={suggestPersonas}><Sparkles size={13} /> Try Again</button>
-                  : <span style={{ fontSize: 12, color: "#4a5568" }}>{suggestions.filter(s => s._accepted).length} of {suggestions.length} accepted</span>
+                  : <span style={{ fontSize: 12, color: "#97a0af" }}>{suggestions.filter(s => s._accepted).length} of {suggestions.length} accepted</span>
                 }
                 <button className="btn btn-ghost" onClick={() => { setModal(null); setSuggestions([]); setSuggestError(null); }}>Done</button>
               </div>
@@ -822,16 +1402,16 @@ Rules:
                 <div className="ai-dot" style={{ width: 8, height: 8, animationDelay: ".2s" }} />
                 <div className="ai-dot" style={{ width: 8, height: 8, animationDelay: ".4s" }} />
               </div>
-              <div style={{ fontSize: 13, color: "#5d6a85" }}>Analyzing your project and suggesting relevant personas...</div>
+              <div style={{ fontSize: 13, color: "#8993a4" }}>Analyzing your project and suggesting relevant personas...</div>
             </div>
           )}
 
           {/* Error */}
           {!suggesting && suggestError && (
             <div style={{ padding: "32px 0", textAlign: "center" }}>
-              <AlertCircle size={28} color="#ff5757" style={{ marginBottom: 12, opacity: .6 }} />
-              <div style={{ fontSize: 14, color: "#8090a8", marginBottom: 6 }}>Something went wrong</div>
-              <div style={{ fontSize: 12, color: "#4a5568", marginBottom: 20 }}>{suggestError}</div>
+              <AlertCircle size={28} color="#de350b" style={{ marginBottom: 12, opacity: .6 }} />
+              <div style={{ fontSize: 14, color: "#505f79", marginBottom: 6 }}>Something went wrong</div>
+              <div style={{ fontSize: 12, color: "#97a0af", marginBottom: 20 }}>{suggestError}</div>
               <button className="btn btn-ai" onClick={suggestPersonas}><Sparkles size={13} /> Try Again</button>
             </div>
           )}
@@ -839,15 +1419,15 @@ Rules:
           {/* Results */}
           {!suggesting && !suggestError && suggestions.length > 0 && (
             <div>
-              <p style={{ fontSize: 13, color: "#5d6a85", marginBottom: 16, lineHeight: 1.6 }}>
-                Based on <strong style={{ color: "#8090a8" }}>{project.name}</strong>, here are the personas that likely interact with this product. Edit, then accept.
+              <p style={{ fontSize: 13, color: "#8993a4", marginBottom: 16, lineHeight: 1.6 }}>
+                Based on <strong style={{ color: "#505f79" }}>{project.name}</strong>, here are the personas that likely interact with this product. Edit, then accept.
               </p>
               {suggestions.map(s => (
-                <div key={s.id} className="card" style={{ borderColor: s._accepted ? "rgba(59,232,168,.3)" : "#1e2533", marginBottom: 12 }}>
+                <div key={s.id} className="card" style={{ borderColor: s._accepted ? "rgba(54,179,126,.3)" : "#dfe1e6", marginBottom: 12 }}>
                   <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
                     {editingSuggestion === s.id
                       ? <input value={s.role} onChange={e => setSuggestions(prev => prev.map(p => p.id === s.id ? { ...p, role: e.target.value } : p))} style={{ fontSize: 14, fontWeight: 700, flex: 1, marginRight: 8 }} />
-                      : <span style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 14, color: "#eef0f7" }}>{s.role}</span>}
+                      : <span style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 14, color: "#172b4d" }}>{s.role}</span>}
                     {s._accepted
                       ? <span className="tag tag-green"><Check size={10} /> Added</span>
                       : <div style={{ display: "flex", gap: 6 }}>
@@ -866,11 +1446,11 @@ Rules:
                     </div>
                   ) : (
                     <div>
-                      <p style={{ fontSize: 12, color: "#7080a0", lineHeight: 1.65, marginBottom: 10 }}>{s.description}</p>
+                      <p style={{ fontSize: 12, color: "#6b778c", lineHeight: 1.65, marginBottom: 10 }}>{s.description}</p>
                       <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
-                        {[["Goals", s.goals, "#3be8a8"], ["Pain Points", s.painPoints, "#ff8080"]].map(([k, v, c]) => v && (
+                        {[["Goals", s.goals, "#36b37e"], ["Pain Points", s.painPoints, "#de350b"]].map(([k, v, c]) => v && (
                           <div key={k}>
-                            <span style={{ fontSize: 10, color: "#4a5568", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em" }}>{k}: </span>
+                            <span style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em" }}>{k}: </span>
                             <span style={{ fontSize: 12, color: c }}>{v}</span>
                           </div>
                         ))}
@@ -905,14 +1485,14 @@ Rules:
 
             {/* Draft preview */}
             {convoStep === "preview" && draft && (
-              <div style={{ background: "#0d1018", border: "1px solid rgba(232,197,71,.2)", borderRadius: 8, padding: 14, marginBottom: 12 }}>
+              <div style={{ background: "#f8f9fa", border: "1px solid rgba(232,197,71,.2)", borderRadius: 8, padding: 14, marginBottom: 12 }}>
                 <div style={{ fontSize: 10, color: "#e8c547", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 8 }}>Generated Profile — click "Edit & Save" to adjust</div>
-                <div style={{ fontWeight: 700, fontSize: 14, color: "#eef0f7", marginBottom: 6 }}>{draft.role}</div>
-                <div style={{ fontSize: 12, color: "#7080a0", marginBottom: 6 }}>{draft.description}</div>
+                <div style={{ fontWeight: 700, fontSize: 14, color: "#172b4d", marginBottom: 6 }}>{draft.role}</div>
+                <div style={{ fontSize: 12, color: "#6b778c", marginBottom: 6 }}>{draft.description}</div>
                 {[["Goals", draft.goals], ["Pain Points", draft.painPoints]].map(([k, v]) => v && (
                   <div key={k} style={{ marginBottom: 3 }}>
-                    <span style={{ fontSize: 10, color: "#4a5568", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em" }}>{k}: </span>
-                    <span style={{ fontSize: 11, color: "#5d6a85" }}>{v}</span>
+                    <span style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em" }}>{k}: </span>
+                    <span style={{ fontSize: 11, color: "#8993a4" }}>{v}</span>
                   </div>
                 ))}
               </div>
@@ -997,8 +1577,8 @@ function EpicsSection({ project, update, setSection }) {
     const hasEnoughInfo = project.about && project.about.length > 30;
 
     const prompt = hasEnoughInfo
-      ? `${projectInfo}\n${extra ? `Additional context: ${extra}\n` : ""}Suggest 3-5 well-scoped epics. Return a JSON array, each object: { title, description }. Start your response with [.`
-      : `${projectInfo}\nThis project description seems thin. Return JSON: { "question": "one short clarifying question about what they're building" }`;
+      ? projectInfo + "\n" + (extra ? "Additional context: " + extra + "\n" : "") + "Suggest 3-5 well-scoped epics. Return a JSON array, each object: { title, description }. Start your response with [."
+      : projectInfo + "\nThis project description seems thin. Return JSON: { \"question\": \"one short clarifying question about what they're building\" }";
 
     const result = await askClaude([{ role: "user", content: prompt }],
       "You are a senior PM. Return only valid JSON starting with [ or {. No markdown, no explanation.");
@@ -1025,13 +1605,13 @@ function EpicsSection({ project, update, setSection }) {
     setSuggestingStories(true);
     setModal("stories");
 
-    const teamRoles = [...new Set(project.team.map(t => t.team))].join(", ") || "FE, BE";
+    const teamRoles = [...new Set(project.team.map(t => t.team).filter(t => t !== "QA"))].join(", ") || "FE, BE";
     const personaRoles = project.personas.map(p => p.role).join(", ") || "end user";
 
     const result = await askClaude([{
       role: "user", content:
-        `Epic: "${epic.title}"\nDescription: ${epic.description}\nProject: ${project.name} — ${project.about}\nPlatform: ${project.platform}\nTeam available: ${teamRoles}\nPersonas: ${personaRoles}\n\nGenerate 4-7 SMART user stories for this epic. Split by team. Each story:\n{ "title": "[TEAM] EpicName | Short desc", "description": "As a \\"...\\" I want to \\"...\\" so that I can \\"...\\"", "ac": "Scenario title\\nGIVEN | ...\\nWHEN | ...\\nTHEN | ...\\nAND | ...\\n---\\nAnother scenario\\nGIVEN | ...", "team": "FE|BE|FS|Mobile|QA|Designer", "aiPts": N }\nReturn a JSON array starting with [. No markdown, no explanation outside the array.`
-    }], "Return only a valid JSON array starting with [. No markdown. No text before or after the array.");
+        `Epic: "${epic.title}"\nDescription: ${epic.description}\nProject: ${project.name} — ${project.about}\nPlatform: ${project.platform}\nTeam: ${teamRoles}\nPersonas: ${personaRoles}\n\nGenerate 4-6 SMART user stories. Split by team (no QA — test cases are subtasks within stories). Keep AC short (1 scenario each).\nEach object: { "title": "[TEAM] EpicName | Short desc", "description": "As a \\"...\\" I want to \\"...\\" so that I can \\"...\\"", "ac": "Happy path\\nGIVEN | ...\\nWHEN | ...\\nTHEN | ...", "team": "FE|BE|FS|Mobile|Designer", "aiPts": N }\nReturn ONLY a JSON array. Start with [. End with ]. Nothing else.`
+    }], "You are a PM. Return ONLY a valid JSON array. Start your response with [ and end with ]. No markdown, no explanation, no text outside the array.", 2500);
 
     setSuggestingStories(false);
     const parsed = parseJSON(result);
@@ -1061,21 +1641,21 @@ function EpicsSection({ project, update, setSection }) {
         </div>
         <div className="sec-actions">
           <button className="btn btn-ghost" onClick={() => suggestEpics()}><Sparkles size={13} /> Suggest from Project</button>
-          <button className="btn btn-primary" onClick={() => { setForm(blank); setModal("form"); }}><Plus size={13} /> New Epic</button>
+          <button className="btn btn-primary" onClick={() => setModal("chat")}><Plus size={13} /> New Epic</button>
         </div>
       </div>
 
       {project.epics.length === 0 ? (
         <Empty icon={<Layers size={36} />} title="No epics yet" sub="Let AI suggest epics from your project description, or add one manually."
-          action={<div style={{ display: "flex", gap: 8 }}><button className="btn btn-ghost" onClick={() => suggestEpics()}><Sparkles size={13} /> Suggest from Project</button><button className="btn btn-primary" onClick={() => { setForm(blank); setModal("form"); }}><Plus size={13} /> New Epic</button></div>} />
+          action={<div style={{ display: "flex", gap: 8 }}><button className="btn btn-ghost" onClick={() => suggestEpics()}><Sparkles size={13} /> Suggest from Project</button><button className="btn btn-primary" onClick={() => setModal("chat")}><Plus size={13} /> New Epic</button></div>} />
       ) : (
         project.epics.map(e => (
           <div key={e.id} className="card">
             <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
               <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#e8c547", flexShrink: 0, marginTop: 6 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontWeight: 600, fontSize: 14, color: "#eef0f7", marginBottom: 4 }}>{e.title}</div>
-                <p style={{ fontSize: 12, color: "#7080a0", lineHeight: 1.55, marginBottom: 10 }}>{e.description}</p>
+                <div style={{ fontWeight: 600, fontSize: 14, color: "#172b4d", marginBottom: 4 }}>{e.title}</div>
+                <p style={{ fontSize: 12, color: "#6b778c", lineHeight: 1.55, marginBottom: 10 }}>{e.description}</p>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
                   <span className="badge badge-accent">{e.stories} stories</span>
                   <button className="btn btn-ghost btn-xs" onClick={() => setSection("stories")}>View stories <ChevronRight size={11} /></button>
@@ -1096,14 +1676,14 @@ function EpicsSection({ project, update, setSection }) {
         <Modal wide title="Suggest Epics from Project" onClose={() => { setModal(null); setSuggestions([]); setSuggestError(null); setClarifyQ(null); }}
           footer={
             <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
-              <span style={{ fontSize: 12, color: "#4a5568" }}>{suggestions.filter(s => s._accepted).length} accepted</span>
+              <span style={{ fontSize: 12, color: "#97a0af" }}>{suggestions.filter(s => s._accepted).length} accepted</span>
               <button className="btn btn-ghost" onClick={() => { setModal(null); setSuggestions([]); setSuggestError(null); setClarifyQ(null); }}>Done</button>
             </div>
           }>
           {suggesting && (
             <div style={{ padding: "40px 0", textAlign: "center" }}>
               <div style={{ display: "inline-flex", gap: 6, marginBottom: 14 }}><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div>
-              <div style={{ fontSize: 13, color: "#5d6a85" }}>Analyzing project and generating epics...</div>
+              <div style={{ fontSize: 13, color: "#8993a4" }}>Analyzing project and generating epics...</div>
             </div>
           )}
           {!suggesting && clarifyQ && (
@@ -1117,20 +1697,20 @@ function EpicsSection({ project, update, setSection }) {
           )}
           {!suggesting && suggestError && (
             <div style={{ textAlign: "center", padding: "24px 0" }}>
-              <div style={{ fontSize: 13, color: "#ff8080", marginBottom: 12 }}>{suggestError}</div>
+              <div style={{ fontSize: 13, color: "#de350b", marginBottom: 12 }}>{suggestError}</div>
               <button className="btn btn-ai" onClick={() => suggestEpics()}><Sparkles size={13} /> Try Again</button>
             </div>
           )}
           {!suggesting && !clarifyQ && suggestions.length > 0 && (
             <div>
-              <p style={{ fontSize: 13, color: "#5d6a85", marginBottom: 14, lineHeight: 1.6 }}>Accept the epics that fit your project. You can edit them after.</p>
+              <p style={{ fontSize: 13, color: "#8993a4", marginBottom: 14, lineHeight: 1.6 }}>Accept the epics that fit your project. You can edit them after.</p>
               {suggestions.map(s => (
-                <div key={s.id} className="card" style={{ borderColor: s._accepted ? "rgba(59,232,168,.3)" : "#1e2533" }}>
+                <div key={s.id} className="card" style={{ borderColor: s._accepted ? "rgba(54,179,126,.3)" : "#dfe1e6" }}>
                   <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 6 }}>
-                    <span style={{ fontWeight: 600, fontSize: 13, color: "#eef0f7" }}>{s.title}</span>
+                    <span style={{ fontWeight: 600, fontSize: 13, color: "#172b4d" }}>{s.title}</span>
                     {s._accepted ? <span className="tag tag-green"><Check size={10} /> Added</span> : <button className="btn btn-primary btn-xs" onClick={() => acceptEpic(s)}>+ Accept</button>}
                   </div>
-                  <p style={{ fontSize: 12, color: "#7080a0", lineHeight: 1.55 }}>{s.description}</p>
+                  <p style={{ fontSize: 12, color: "#6b778c", lineHeight: 1.55 }}>{s.description}</p>
                 </div>
               ))}
             </div>
@@ -1143,32 +1723,32 @@ function EpicsSection({ project, update, setSection }) {
         <Modal wide title={`Suggest Stories — ${storySuggestEpic.title}`} onClose={() => { setModal(null); setStorySuggestions([]); setStorySuggestEpic(null); }}
           footer={
             <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
-              <span style={{ fontSize: 12, color: "#4a5568" }}>{storySuggestions.filter(s => s._accepted).length} stories accepted</span>
+              <span style={{ fontSize: 12, color: "#97a0af" }}>{storySuggestions.filter(s => s._accepted).length} stories accepted</span>
               <button className="btn btn-ghost" onClick={() => { setModal(null); setStorySuggestions([]); setStorySuggestEpic(null); }}>Done</button>
             </div>
           }>
           {suggestingStories && (
             <div style={{ padding: "40px 0", textAlign: "center" }}>
               <div style={{ display: "inline-flex", gap: 6, marginBottom: 14 }}><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div>
-              <div style={{ fontSize: 13, color: "#5d6a85" }}>Generating SMART stories split by team...</div>
+              <div style={{ fontSize: 13, color: "#8993a4" }}>Generating SMART stories split by team...</div>
             </div>
           )}
           {!suggestingStories && storySuggestError && (
             <div style={{ textAlign: "center", padding: "24px 0" }}>
-              <div style={{ fontSize: 13, color: "#ff8080", marginBottom: 12 }}>{storySuggestError}</div>
+              <div style={{ fontSize: 13, color: "#de350b", marginBottom: 12 }}>{storySuggestError}</div>
               <button className="btn btn-ai" onClick={() => suggestStories(storySuggestEpic)}><Sparkles size={13} /> Try Again</button>
             </div>
           )}
           {!suggestingStories && storySuggestions.length > 0 && (
             <div>
-              <p style={{ fontSize: 13, color: "#5d6a85", marginBottom: 14, lineHeight: 1.6 }}>Review and tweak each story before accepting. Rejected ones are removed.</p>
+              <p style={{ fontSize: 13, color: "#8993a4", marginBottom: 14, lineHeight: 1.6 }}>Review and tweak each story before accepting. Rejected ones are removed.</p>
               {storySuggestions.filter(s => !s._accepted).map(s => {
                 const tag = s.team || (s.title.match(/\[(FE|BE|FS|Mobile|QA|Designer)\]/)?.[1]);
                 return (
                   <div key={s.id} className="card" style={{ marginBottom: 10 }}>
                     <div style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: s._editing ? 10 : 6 }}>
                       {tag && <span className={`tag tag-${tag}`} style={{ flexShrink: 0, marginTop: 2 }}>{tag}</span>}
-                      <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: "#eef0f7" }}>{s.title}</span>
+                      <span style={{ flex: 1, fontSize: 13, fontWeight: 600, color: "#172b4d" }}>{s.title}</span>
                       <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
                         <button className="btn btn-ghost btn-xs" onClick={() => toggleEdit(s.id)}>{s._editing ? "Done" : <><Edit2 size={11} /> Tweak</>}</button>
                         <button className="btn btn-primary btn-xs" onClick={() => acceptStory(s)}>+ Accept</button>
@@ -1183,8 +1763,8 @@ function EpicsSection({ project, update, setSection }) {
                       </div>
                     ) : (
                       <div>
-                        <p style={{ fontSize: 12, color: "#7080a0", fontStyle: "italic", marginBottom: s.ac ? 8 : 0, lineHeight: 1.5 }}>{s.description}</p>
-                        {s.ac && <pre style={{ fontSize: 11, color: "#5d6a85", fontFamily: "'DM Mono',monospace", whiteSpace: "pre-wrap", lineHeight: 1.7, background: "#0d1018", padding: "8px 10px", borderRadius: 6 }}>{s.ac}</pre>}
+                        <p style={{ fontSize: 12, color: "#6b778c", fontStyle: "italic", marginBottom: s.ac ? 8 : 0, lineHeight: 1.5 }}>{s.description}</p>
+                        {s.ac && <pre style={{ fontSize: 11, color: "#8993a4", fontFamily: "'DM Mono',monospace", whiteSpace: "pre-wrap", lineHeight: 1.7, background: "#f8f9fa", padding: "8px 10px", borderRadius: 6 }}>{s.ac}</pre>}
                         <div style={{ marginTop: 6 }}><span className="pts-chip pts-ai"><Sparkles size={10} /> {s.aiPts}pts</span></div>
                       </div>
                     )}
@@ -1192,11 +1772,11 @@ function EpicsSection({ project, update, setSection }) {
                 );
               })}
               {storySuggestions.filter(s => s._accepted).length > 0 && (
-                <div style={{ marginTop: 12, padding: "10px 14px", background: "rgba(59,232,168,.06)", border: "1px solid rgba(59,232,168,.15)", borderRadius: 8 }}>
-                  <div style={{ fontSize: 11, color: "#3be8a8", marginBottom: 6, fontFamily: "'DM Mono',monospace" }}>ACCEPTED STORIES</div>
+                <div style={{ marginTop: 12, padding: "10px 14px", background: "rgba(54,179,126,.06)", border: "1px solid rgba(54,179,126,.15)", borderRadius: 8 }}>
+                  <div style={{ fontSize: 11, color: "#36b37e", marginBottom: 6, fontFamily: "'DM Mono',monospace" }}>ACCEPTED STORIES</div>
                   {storySuggestions.filter(s => s._accepted).map(s => (
-                    <div key={s.id} style={{ fontSize: 12, color: "#5d6a85", display: "flex", gap: 6, alignItems: "center", marginBottom: 3 }}>
-                      <Check size={11} color="#3be8a8" />{s.title}
+                    <div key={s.id} style={{ fontSize: 12, color: "#8993a4", display: "flex", gap: 6, alignItems: "center", marginBottom: 3 }}>
+                      <Check size={11} color="#36b37e" />{s.title}
                     </div>
                   ))}
                 </div>
@@ -1206,15 +1786,118 @@ function EpicsSection({ project, update, setSection }) {
         </Modal>
       )}
 
-      {/* ── Edit / New form ── */}
+      {/* ── Epic chat creation (new epics only) ── */}
+      {modal === "chat" && (
+        <EpicChatModal
+          project={project}
+          onSave={(title, description) => {
+            update({ epics: [...project.epics, { id: uid(), title, description, stories: 0 }] });
+            setModal(null);
+          }}
+          onClose={() => setModal(null)}
+        />
+      )}
+
+      {/* ── Edit form (existing epics) ── */}
       {modal === "form" && (
-        <Modal title={form.id ? "Edit Epic" : "New Epic"} onClose={() => setModal(null)}
+        <Modal title="Edit Epic" onClose={() => setModal(null)}
           footer={<><button className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button><button className="btn btn-primary" onClick={save}>Save Epic</button></>}>
-          <div className="field"><label>Epic Title</label><input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Authentication & Access Control" autoFocus /></div>
-          <div className="field"><label>Description</label><textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} placeholder="Brief description of what this epic covers..." /></div>
+          <div className="field"><label>Epic Title</label><input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} autoFocus /></div>
+          <div className="field"><label>Description</label><textarea value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} rows={4} /></div>
         </Modal>
       )}
     </div>
+  );
+}
+
+function EpicChatModal({ project, onSave, onClose }) {
+  const [convo, setConvo] = useState([{ role: "ai", text: `What's this epic about? Describe the feature or capability — I'll generate the title and scope from that.` }]);
+  const [input, setInput] = useState("");
+  const [step, setStep] = useState("asking"); // asking | generating | preview
+  const [preview, setPreview] = useState(null);
+  const convoHistory = useRef([]);
+  const chatBottom = useRef(null);
+  useEffect(() => { chatBottom.current?.scrollIntoView({ behavior: "smooth" }); }, [convo]);
+
+  const SYSTEM = `You are a senior PM defining an epic for a product backlog.
+Project: ${project.name} — ${project.about}
+Industry: ${project.industry}, Platform: ${project.platform}
+Existing epics: ${project.epics.map(e => e.title).join(", ") || "none"}
+
+When you have a clear picture, return JSON in a code block:
+\`\`\`json
+{"title": "Epic Title (clear, noun-phrase)", "description": "2-3 sentences: what this epic covers, what problem it solves, what's in/out of scope"}
+\`\`\`
+Generate immediately from a solid description. Ask at most ONE clarifying question if truly unclear.`;
+
+  const sendMsg = async () => {
+    const text = input.trim();
+    if (!text || step === "generating") return;
+    setInput("");
+    setConvo(prev => [...prev, { role: "user", text }, { role: "ai", text: "..." }]);
+    convoHistory.current.push({ role: "user", content: text });
+    setStep("generating");
+
+    const reply = await askClaude(convoHistory.current, SYSTEM);
+    convoHistory.current.push({ role: "assistant", content: reply });
+
+    const jsonMatch = reply.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) {
+      try {
+        const parsed = JSON.parse(jsonMatch[1].trim());
+        setPreview(parsed);
+        const clean = reply.replace(/```[\s\S]*?```/g, "").trim();
+        setConvo(prev => [...prev.slice(0, -1), { role: "ai", text: clean || "Here's the epic — looks good?" }]);
+        setStep("preview");
+      } catch {
+        setConvo(prev => [...prev.slice(0, -1), { role: "ai", text: reply }]);
+        setStep("asking");
+      }
+    } else {
+      setConvo(prev => [...prev.slice(0, -1), { role: "ai", text: reply }]);
+      setStep("asking");
+    }
+  };
+
+  return (
+    <Modal title="New Epic" onClose={onClose}
+      footer={
+        step === "preview" && preview
+          ? <><button className="btn btn-ghost" onClick={() => setStep("asking")}>Keep chatting</button><button className="btn btn-primary" onClick={() => onSave(preview.title, preview.description)}>Save Epic</button></>
+          : <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+      }>
+      <div style={{ background: "#f8f9fa", border: "1px solid #dfe1e6", borderRadius: 10, overflow: "hidden", display: "flex", flexDirection: "column", minHeight: 280 }}>
+        <div style={{ flex: 1, overflowY: "auto", padding: "14px 14px 8px" }}>
+          {convo.map((m, i) => (
+            <div key={i} className={`ai-bubble ai-bubble-${m.role === "ai" ? "bot" : "user"}`}>
+              {m.text === "..." ? <div className="ai-typing"><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div> : m.text}
+            </div>
+          ))}
+          <div ref={chatBottom} />
+        </div>
+
+        {step === "preview" && preview && (
+          <div style={{ borderTop: "1px solid #dfe1e6", padding: 14, background: "#f1f2f4" }}>
+            <div style={{ fontSize: 10, color: "#e8c547", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>Generated Epic</div>
+            <div style={{ fontWeight: 700, fontSize: 14, color: "#172b4d", marginBottom: 6 }}>{preview.title}</div>
+            <div style={{ fontSize: 12, color: "#6b778c", lineHeight: 1.65 }}>{preview.description}</div>
+          </div>
+        )}
+
+        {step !== "preview" && (
+          <div style={{ display: "flex", gap: 8, padding: "10px 12px", borderTop: "1px solid #dfe1e6" }}>
+            <textarea value={input} onChange={e => setInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendMsg())}
+              placeholder="Describe the epic... (Enter to send)" disabled={step === "generating"}
+              style={{ flex: 1, minHeight: "unset", height: 38, resize: "none", padding: "9px 12px", fontSize: 13 }} />
+            <button className="btn btn-primary" onClick={sendMsg}
+              disabled={!input.trim() || step === "generating"} style={{ padding: "8px 14px" }}>
+              <Send size={13} />
+            </button>
+          </div>
+        )}
+      </div>
+    </Modal>
   );
 }
 
@@ -1222,7 +1905,7 @@ function EpicsSection({ project, update, setSection }) {
 function ACBlock({ ac }) {
   if (!ac || !ac.trim()) return null;
   const KEYWORDS = ["GIVEN", "WHEN", "THEN", "AND"];
-  const kwColor = { GIVEN: "#5ba4f5", WHEN: "#c57bff", THEN: "#3be8a8", AND: "#7080a0" };
+  const kwColor = { GIVEN: "#0052cc", WHEN: "#5b21b6", THEN: "#36b37e", AND: "#6b778c" };
   const blocks = ac.split(/\n?---\n?/).map(b => b.trim()).filter(Boolean);
   return (
     <div style={{ marginBottom: 8 }}>
@@ -1233,20 +1916,20 @@ function ACBlock({ ac }) {
         const acLines = firstIsSubtitle ? lines.slice(1) : lines;
         return (
           <div key={bi} style={{ marginBottom: bi < blocks.length - 1 ? 10 : 0 }}>
-            {subtitle && <div style={{ fontSize: 11, fontWeight: 600, color: "#c8d4e8", fontFamily: "'DM Sans',sans-serif", marginBottom: 5, paddingBottom: 4, borderBottom: "1px solid #1e2533" }}>{subtitle}</div>}
+            {subtitle && <div style={{ fontSize: 11, fontWeight: 600, color: "#344563", fontFamily: "'DM Sans',sans-serif", marginBottom: 5, paddingBottom: 4, borderBottom: "1px solid #dfe1e6" }}>{subtitle}</div>}
             {acLines.map((line, li) => {
               const pipeIdx = line.indexOf("|");
-              if (pipeIdx === -1) return <div key={li} style={{ fontSize: 11, color: "#5d6a85", fontFamily: "'DM Mono',monospace", lineHeight: 1.8 }}>{line}</div>;
+              if (pipeIdx === -1) return <div key={li} style={{ fontSize: 11, color: "#8993a4", fontFamily: "'DM Mono',monospace", lineHeight: 1.8 }}>{line}</div>;
               const kw = line.slice(0, pipeIdx).trim();
               const val = line.slice(pipeIdx + 1).trim();
               return (
                 <div key={li} style={{ display: "flex", gap: 10, fontSize: 11, fontFamily: "'DM Mono',monospace", lineHeight: 1.9 }}>
                   <span style={{ color: kwColor[kw] || "#e8c547", minWidth: 44, fontWeight: 600, flexShrink: 0 }}>{kw}</span>
-                  <span style={{ color: "#8090a8" }}>{val}</span>
+                  <span style={{ color: "#505f79" }}>{val}</span>
                 </div>
               );
             })}
-            {bi < blocks.length - 1 && <div style={{ height: 1, background: "#1e2533", margin: "8px 0" }} />}
+            {bi < blocks.length - 1 && <div style={{ height: 1, background: "#dfe1e6", margin: "8px 0" }} />}
           </div>
         );
       })}
@@ -1341,6 +2024,30 @@ ${project.aiRules.length ? "Project rules: " + project.aiRules.join("; ") : ""}`
 
   const epicOf = id => project.epics.find(e => e.id === id)?.title || "—";
 
+  const [improving, setImproving] = useState(null);
+  const [copied, setCopied] = useState(null);
+  const syncTool = detectTool(project.syncUrl);
+
+  const improveStory = async (s) => {
+    setImproving(s.id);
+    const epic = project.epics.find(e => e.id === s.epicId);
+    const result = await askClaude([{
+      role: "user",
+      content: `Improve this user story. Make the description clearer, the AC more complete with edge cases, and suggest a better title if needed.\n\nTitle: ${s.title}\nEpic: ${epic?.title || "unknown"}\nDescription: ${s.description}\nAC:\n${s.ac}\n\nReturn JSON: { "title": "...", "description": "...", "ac": "subtitle\\nGIVEN | ...\\nWHEN | ...\\nTHEN | ...\\n---\\nsubtitle2\\n..." }\nOnly return what changed — keep the title if it's good.`
+    }], "You are a senior PM. Improve user stories. Return only valid JSON in a code block.", 1500);
+    setImproving(null);
+    const jsonMatch = result.match(/```(?:json)?\s*([\s\S]*?)```/);
+    const parsed = jsonMatch ? parseJSON(jsonMatch[1]) : parseJSON(result);
+    if (parsed) update({ stories: project.stories.map(x => x.id === s.id ? { ...x, ...parsed } : x) });
+  };
+
+  const copyStory = (s) => {
+    const epic = project.epics.find(e => e.id === s.epicId)?.title || "";
+    navigator.clipboard.writeText(copyStoryForTool(s, epic, syncTool)).then(() => {
+      setCopied(s.id); setTimeout(() => setCopied(null), 2000);
+    });
+  };
+
   return (
     <div>
       <div className="sec-head">
@@ -1359,17 +2066,27 @@ ${project.aiRules.length ? "Project rules: " + project.aiRules.join("; ") : ""}`
       ) : (
         stories.map(s => {
           const tag = s.title.match(/\[(FE|BE|FS|Mobile|QA|Designer)\]/)?.[1];
+          const isImproving = improving === s.id;
+          const isCopied = copied === s.id;
+          const hasKey = s.trackerKey;
           return (
-            <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", background: "#111318", border: "1px solid #1e2533", borderRadius: 8, marginBottom: 6, transition: "border-color .12s" }}
-              onMouseEnter={e => e.currentTarget.style.borderColor = "#252d40"} onMouseLeave={e => e.currentTarget.style.borderColor = "#1e2533"}>
+            <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", background: "#ffffff", border: `1px solid ${hasKey ? "rgba(0,82,204,.12)" : "#dfe1e6"}`, borderRadius: 8, marginBottom: 6, transition: "border-color .12s" }}
+              onMouseEnter={e => e.currentTarget.style.borderColor = hasKey ? "rgba(0,82,204,.25)" : "#c1c7d0"} onMouseLeave={e => e.currentTarget.style.borderColor = hasKey ? "rgba(0,82,204,.12)" : "#dfe1e6"}>
               {tag && <TeamTag team={tag} />}
-              <span style={{ flex: 1, fontSize: 13, color: "#c8d4e8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.title}</span>
+              <span style={{ flex: 1, fontSize: 13, color: "#344563", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.title}</span>
+              {hasKey && <span style={{ fontSize: 11, color: "#0052cc", fontFamily: "'DM Mono',monospace", flexShrink: 0 }}>{s.trackerKey}</span>}
               <span className="tag tag-muted" style={{ fontSize: 10, flexShrink: 0 }}>{epicOf(s.epicId)}</span>
               {s.teamPts !== null
                 ? <span className="pts-chip pts-team" style={{ flexShrink: 0 }}><Check size={9} /> {s.teamPts}pt</span>
                 : s.aiPts !== null
                   ? <span className="pts-chip pts-ai" style={{ flexShrink: 0 }}><Sparkles size={9} /> {s.aiPts}pt</span>
                   : null}
+              <button className="btn btn-ai btn-xs" onClick={() => improveStory(s)} disabled={isImproving} style={{ flexShrink: 0 }}>
+                {isImproving ? <><div className="ai-dot" style={{ width: 5, height: 5 }} /><div className="ai-dot" style={{ width: 5, height: 5, animationDelay: ".2s" }} /></> : <><Sparkles size={10} /> Improve</>}
+              </button>
+              <button className="btn btn-ghost btn-xs" onClick={() => copyStory(s)} style={{ flexShrink: 0, color: isCopied ? "#36b37e" : "#8993a4" }}>
+                {isCopied ? <><Check size={10} /> Copied!</> : <><Link size={10} /> Copy</>}
+              </button>
               <button className="icon-btn" onClick={() => openEdit(s)}><Edit2 size={13} /></button>
               <button className="icon-btn" onClick={() => del(s.id)}><Trash2 size={13} /></button>
             </div>
@@ -1385,12 +2102,12 @@ ${project.aiRules.length ? "Project rules: " + project.aiRules.join("; ") : ""}`
               ? <><button className="btn btn-ghost" onClick={() => setModal("edit")}>Edit Fields →</button><button className="btn btn-primary" onClick={save}>Save Story</button></>
               : <button className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button>
           }>
-          <p style={{ fontSize: 13, color: "#5d6a85", marginBottom: 12, lineHeight: 1.6 }}>Describe the story in plain language. AI will name it, structure it, and generate AC.</p>
+          <p style={{ fontSize: 13, color: "#8993a4", marginBottom: 12, lineHeight: 1.6 }}>Describe the story in plain language. AI will name it, structure it, and generate AC.</p>
 
-          <div style={{ background: "#0d1018", border: "1px solid #1e2533", borderRadius: 10, overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: 420 }}>
+          <div style={{ background: "#f8f9fa", border: "1px solid #dfe1e6", borderRadius: 10, overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: 420 }}>
             <div style={{ flex: 1, overflowY: "auto", padding: "14px 14px 8px", minHeight: 80 }}>
               {convo.length === 0 && (
-                <div style={{ fontSize: 12, color: "#3a4255", fontStyle: "italic", padding: "8px 0" }}>
+                <div style={{ fontSize: 12, color: "#b3bac5", fontStyle: "italic", padding: "8px 0" }}>
                   e.g. "Login screen for the auth epic — email/password, handle wrong credentials and lockout after 5 attempts, FE work"
                 </div>
               )}
@@ -1403,10 +2120,10 @@ ${project.aiRules.length ? "Project rules: " + project.aiRules.join("; ") : ""}`
             </div>
 
             {convoStep === "preview" && form.title && (
-              <div style={{ borderTop: "1px solid #1e2533", padding: 14, background: "#0a0c10" }}>
+              <div style={{ borderTop: "1px solid #dfe1e6", padding: 14, background: "#f1f2f4" }}>
                 <div style={{ fontSize: 10, color: "#e8c547", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>Generated Story</div>
-                <div style={{ fontWeight: 700, fontSize: 13, color: "#eef0f7", marginBottom: 4 }}>{form.title}</div>
-                {form.description && <div style={{ fontSize: 12, color: "#7080a0", fontStyle: "italic", marginBottom: 8 }}>{form.description}</div>}
+                <div style={{ fontWeight: 700, fontSize: 13, color: "#172b4d", marginBottom: 4 }}>{form.title}</div>
+                {form.description && <div style={{ fontSize: 12, color: "#6b778c", fontStyle: "italic", marginBottom: 8 }}>{form.description}</div>}
                 <ACBlock ac={form.ac} />
                 <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
                   {form.aiPts && <span className="pts-chip pts-ai"><Sparkles size={9} /> {form.aiPts}pt</span>}
@@ -1415,7 +2132,7 @@ ${project.aiRules.length ? "Project rules: " + project.aiRules.join("; ") : ""}`
               </div>
             )}
 
-            <div style={{ display: "flex", gap: 8, padding: "10px 12px", borderTop: "1px solid #1e2533" }}>
+            <div style={{ display: "flex", gap: 8, padding: "10px 12px", borderTop: "1px solid #dfe1e6" }}>
               <textarea value={convoInput} onChange={e => setConvoInput(e.target.value)}
                 onKeyDown={e => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), convo.length === 0 ? startConvo() : sendConvo())}
                 placeholder="Describe the story... (Enter to send)" disabled={convoStep === "generating"}
@@ -1432,7 +2149,19 @@ ${project.aiRules.length ? "Project rules: " + project.aiRules.join("; ") : ""}`
       {/* ── Edit form modal ── */}
       {modal === "edit" && (
         <Modal wide title={form.id ? "Edit Story" : "Story Details"} onClose={() => setModal(null)}
-          footer={<><button className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button><button className="btn btn-primary" onClick={save}>Save Story</button></>}>
+          footer={
+            <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
+              {form.id && (
+                <button className="btn btn-ai btn-sm" onClick={async () => { const s = project.stories.find(x => x.id === form.id); if (!s) return; await improveStory(s); const updated = project.stories.find(x => x.id === form.id); if (updated) setForm(updated); }} disabled={improving === form.id}>
+                  {improving === form.id ? "Improving..." : <><Sparkles size={12} /> Improve with AI</>}
+                </button>
+              )}
+              <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
+                <button className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button>
+                <button className="btn btn-primary" onClick={save}>Save Story</button>
+              </div>
+            </div>
+          }>
           <div className="row">
             <div className="field" style={{ flex: 2 }}><label>Title</label><input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="[FE] Auth | Login screen" /></div>
             <div className="field"><label>Epic</label>
@@ -1465,8 +2194,6 @@ ${project.aiRules.length ? "Project rules: " + project.aiRules.join("; ") : ""}`
     </div>
   );
 }
-
-
 // ─── Bugs ─────────────────────────────────────────────────────────────────────
 function BugsSection({ project, update }) {
   const [modal, setModal] = useState(null);
@@ -1474,7 +2201,7 @@ function BugsSection({ project, update }) {
   const [form, setForm] = useState(blank);
   const [convo, setConvo] = useState([]);
   const [convoInput, setConvoInput] = useState("");
-  const [convoStep, setConvoStep] = useState("idle"); // idle | asking | generating | preview
+  const [convoStep, setConvoStep] = useState("idle");
   const convoHistory = useRef([]);
   const chatBottom = useRef(null);
   useEffect(() => { chatBottom.current?.scrollIntoView({ behavior: "smooth" }); }, [convo]);
@@ -1487,51 +2214,54 @@ function BugsSection({ project, update }) {
   };
   const del = id => update({ bugs: project.bugs.filter(b => b.id !== id) });
 
-  const openAI = () => {
-    setForm(blank); setConvo([]); setConvoInput(""); setConvoStep("idle"); setModal("ai");
-  };
+  const openAI = () => { setForm(blank); setConvo([]); setConvoInput(""); setConvoStep("idle"); convoHistory.current = []; setModal("ai"); };
 
-  const startConvo = async () => {
-    if (!form.title.trim()) return;
-    setConvoStep("asking");
-    convoHistory.current = [];
-    const firstMsg = { role: "user", content: `Bug title: "${form.title}". Project: ${project.name} (${project.industry}, ${project.platform}).` };
-    convoHistory.current = [firstMsg];
-    setConvo([{ role: "ai", text: "..." }]);
-    const reply = await askClaude(convoHistory.current,
-      `You are a senior QA engineer helping structure a bug report. Ask 1-2 clarifying questions if needed (steps to reproduce, environment, expected vs actual). When you have enough, generate a JSON bug report: { steps, expected, current, evidence, suggestions }. Return JSON in a code block when ready.`);
-    convoHistory.current.push({ role: "assistant", content: reply });
-    const jsonMatch = reply.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) {
-      try {
-        const parsed = JSON.parse(jsonMatch[1].trim());
-        setForm(f => ({ ...f, ...parsed }));
-        setConvo([{ role: "ai", text: reply.replace(/```[\s\S]*?```/g, "").trim() || "Bug report generated — review below." }]);
-        setConvoStep("preview");
-      } catch { setConvo([{ role: "ai", text: reply }]); setConvoStep("asking"); }
-    } else { setConvo([{ role: "ai", text: reply }]); setConvoStep("asking"); }
-  };
+  const BUG_FENCE = "```";
+  const BUG_SYSTEM = `You are a senior QA engineer helping write a structured bug report.
+Project: ${project.name} (${project.industry}, ${project.platform}).
+When you have enough info, return JSON in a code block:
+${BUG_FENCE}json
+{"title":"[BUG TEAM] Module | Short desc","steps":"1. ...\n2. ...","expected":"...","current":"...","evidence":"","suggestions":"..."}
+${BUG_FENCE}
+Generate immediately from a clear description. Only ask ONE short question if something critical is missing (like steps or environment).`;
 
-  const sendConvo = async () => {
+  const sendMsg = async () => {
     const text = convoInput.trim();
     if (!text || convoStep === "generating") return;
     setConvoInput("");
+    const isFirst = convo.length === 0;
     setConvo(prev => [...prev, { role: "user", text }, { role: "ai", text: "..." }]);
-    convoHistory.current.push({ role: "user", content: text });
+    convoHistory.current.push({ role: "user", content: isFirst ? `Bug report: "${text}"` : text });
     setConvoStep("generating");
-    const reply = await askClaude(convoHistory.current,
-      `You are a QA engineer. Ask short clarifying questions or generate the bug JSON in a code block when ready. JSON keys: steps, expected, current, evidence (leave empty if unknown), suggestions.`);
+
+    const reply = await askClaude(convoHistory.current, BUG_SYSTEM);
     convoHistory.current.push({ role: "assistant", content: reply });
+
     const jsonMatch = reply.match(/```(?:json)?\s*([\s\S]*?)```/);
     if (jsonMatch) {
       try {
         const parsed = JSON.parse(jsonMatch[1].trim());
         setForm(f => ({ ...f, ...parsed }));
-        const cleanText = reply.replace(/```[\s\S]*?```/g, "").trim();
-        setConvo(prev => [...prev.slice(0, -1), { role: "ai", text: cleanText || "Bug report ready — review below." }]);
+        const clean = reply.replace(/```[\s\S]*?```/g, "").trim();
+        setConvo(prev => [...prev.slice(0, -1), { role: "ai", text: clean || "Bug report ready — review and save." }]);
         setConvoStep("preview");
-      } catch { setConvo(prev => [...prev.slice(0, -1), { role: "ai", text: reply }]); setConvoStep("asking"); }
-    } else { setConvo(prev => [...prev.slice(0, -1), { role: "ai", text: reply }]); setConvoStep("asking"); }
+      } catch {
+        setConvo(prev => [...prev.slice(0, -1), { role: "ai", text: reply }]);
+        setConvoStep("asking");
+      }
+    } else {
+      setConvo(prev => [...prev.slice(0, -1), { role: "ai", text: reply }]);
+      setConvoStep("asking");
+    }
+  };
+
+  const [copiedBug, setCopiedBug] = useState(null);
+  const syncTool = detectTool(project.syncUrl);
+
+  const copyBug = (b) => {
+    navigator.clipboard.writeText(copyBugForTool(b, syncTool)).then(() => {
+      setCopiedBug(b.id); setTimeout(() => setCopiedBug(null), 2000);
+    });
   };
 
   return (
@@ -1546,12 +2276,18 @@ function BugsSection({ project, update }) {
       ) : (
         project.bugs.map(b => {
           const tag = b.title.match(/\[(FE|BE|FS|Mobile|QA|Designer)\]/)?.[1];
+          const isCopied = copiedBug === b.id;
+          const hasKey = b.trackerKey;
           return (
-            <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", background: "#111318", border: "1px solid #1e2533", borderRadius: 8, marginBottom: 6, transition: "border-color .12s" }}
-              onMouseEnter={e => e.currentTarget.style.borderColor = "#252d40"} onMouseLeave={e => e.currentTarget.style.borderColor = "#1e2533"}>
+            <div key={b.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", background: "#ffffff", border: `1px solid ${hasKey ? "rgba(0,82,204,.12)" : "#dfe1e6"}`, borderRadius: 8, marginBottom: 6, transition: "border-color .12s" }}
+              onMouseEnter={e => e.currentTarget.style.borderColor = hasKey ? "rgba(0,82,204,.25)" : "#c1c7d0"} onMouseLeave={e => e.currentTarget.style.borderColor = hasKey ? "rgba(0,82,204,.12)" : "#dfe1e6"}>
               <span className="tag tag-BUG" style={{ flexShrink: 0 }}>BUG</span>
               {tag && <TeamTag team={tag} />}
-              <span style={{ flex: 1, fontSize: 13, color: "#c8d4e8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.title}</span>
+              <span style={{ flex: 1, fontSize: 13, color: "#344563", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{b.title}</span>
+              {hasKey && <span style={{ fontSize: 11, color: "#0052cc", fontFamily: "'DM Mono',monospace", flexShrink: 0 }}>{b.trackerKey}</span>}
+              <button className="btn btn-ghost btn-xs" onClick={() => copyBug(b)} style={{ flexShrink: 0, color: isCopied ? "#36b37e" : "#8993a4" }}>
+                {isCopied ? <><Check size={10} /> Copied!</> : <><Link size={10} /> Copy</>}
+              </button>
               <button className="icon-btn" onClick={() => { setForm(b); setConvo([]); setConvoStep("idle"); setModal("form"); }}><Edit2 size={13} /></button>
               <button className="icon-btn" onClick={() => del(b.id)}><Trash2 size={13} /></button>
             </div>
@@ -1567,11 +2303,11 @@ function BugsSection({ project, update }) {
               ? <><button className="btn btn-ghost" onClick={() => setModal("form")}>Edit Fields →</button><button className="btn btn-primary" onClick={save}>Save Bug</button></>
               : <button className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button>
           }>
-          <p style={{ fontSize: 13, color: "#5d6a85", marginBottom: 12, lineHeight: 1.6 }}>Describe the bug. AI will ask follow-up questions only if needed.</p>
+          <p style={{ fontSize: 13, color: "#8993a4", marginBottom: 12, lineHeight: 1.6 }}>Describe the bug. AI will ask follow-up questions only if needed.</p>
 
-          <div style={{ background: "#0d1018", border: "1px solid #1e2533", borderRadius: 10, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <div style={{ background: "#f8f9fa", border: "1px solid #dfe1e6", borderRadius: 10, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             <div style={{ maxHeight: 300, overflowY: "auto", padding: "14px 14px 8px", minHeight: 60 }}>
-              {convo.length === 0 && <div style={{ fontSize: 12, color: "#3a4255", fontStyle: "italic" }}>e.g. "Login button does nothing on mobile Safari after entering credentials"</div>}
+              {convo.length === 0 && <div style={{ fontSize: 12, color: "#b3bac5", fontStyle: "italic" }}>e.g. "Login button does nothing on mobile Safari after entering credentials"</div>}
               {convo.map((m, i) => <div key={i} className={`ai-bubble ai-bubble-${m.role === "ai" ? "bot" : "user"}`}>
                 {m.text === "..." ? <div className="ai-typing"><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div> : m.text}
               </div>)}
@@ -1579,12 +2315,12 @@ function BugsSection({ project, update }) {
             </div>
 
             {convoStep === "preview" && (
-              <div style={{ borderTop: "1px solid #1e2533", padding: 14, background: "#0a0c10" }}>
+              <div style={{ borderTop: "1px solid #dfe1e6", padding: 14, background: "#f1f2f4" }}>
                 <div style={{ fontSize: 10, color: "#e8c547", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>Generated Report</div>
-                <div style={{ fontWeight: 700, fontSize: 13, color: "#eef0f7", marginBottom: 10 }}>{form.title}</div>
-                {[["Steps", form.steps, "#7080a0"], ["Expected", form.expected, "#3be8a8"], ["Current", form.current, "#ff8080"], ["Suggestions", form.suggestions, "#c8b870"]].map(([k, v, c]) => v && (
+                <div style={{ fontWeight: 700, fontSize: 13, color: "#172b4d", marginBottom: 10 }}>{form.title}</div>
+                {[["Steps", form.steps, "#6b778c"], ["Expected", form.expected, "#36b37e"], ["Current", form.current, "#de350b"], ["Suggestions", form.suggestions, "#7a6000"]].map(([k, v, c]) => v && (
                   <div key={k} style={{ marginBottom: 8 }}>
-                    <div style={{ fontSize: 10, color: "#4a5568", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 2 }}>{k}</div>
+                    <div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 2 }}>{k}</div>
                     <div style={{ fontSize: 12, color: c, whiteSpace: "pre-wrap" }}>{v}</div>
                   </div>
                 ))}
@@ -1592,13 +2328,13 @@ function BugsSection({ project, update }) {
             )}
 
             {convoStep !== "preview" && (
-              <div style={{ display: "flex", gap: 8, padding: "10px 12px", borderTop: convo.length ? "1px solid #1e2533" : "none" }}>
+              <div style={{ display: "flex", gap: 8, padding: "10px 12px", borderTop: convo.length ? "1px solid #dfe1e6" : "none" }}>
                 <textarea value={convoInput} onChange={e => setConvoInput(e.target.value)}
-                  onKeyDown={e => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), convo.length === 0 ? startConvo() : sendConvo())}
+                  onKeyDown={e => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), sendMsg())}
                   placeholder={convo.length === 0 ? "Describe the bug... (Enter to send)" : "Your answer... (Enter to send)"}
                   disabled={convoStep === "generating"}
                   style={{ flex: 1, minHeight: "unset", height: 38, resize: "none", padding: "9px 12px", fontSize: 13 }} />
-                <button className="btn btn-primary" onClick={convo.length === 0 ? startConvo : sendConvo}
+                <button className="btn btn-primary" onClick={sendMsg}
                   disabled={!convoInput.trim() || convoStep === "generating"} style={{ padding: "8px 14px" }}><Send size={13} /></button>
               </div>
             )}
@@ -1645,9 +2381,10 @@ function DesignSection({ project, update }) {
   const del = id => update({ design: project.design.filter(d => d.id !== id) });
   const epicOf = id => project.epics.find(e => e.id === id)?.title || "—";
 
+  const epicListForDesign = project.epics.map(e => "id:" + e.id + " -> \"" + e.title + "\"").join(", ");
   const DESIGN_SYSTEM = `You are a PM writing a design brief. The design team defines how to implement it — keep the brief high-level and non-prescriptive.
 Project: ${project.name} (${project.industry}, ${project.platform})
-Available epics: ${project.epics.map(e => `id:${e.id} → "${e.title}"`).join(", ")}
+Available epics: ${epicListForDesign}
 
 When you have enough info, return JSON in a code block:
 { "title": "[Design] EpicName | Short desc", "epicId": "...", "desc": "What needs to be designed, plain language", "objective": "One sentence goal", "scenarios": "list scenarios to cover", "deliverables": "expected outputs" }
@@ -1688,10 +2425,10 @@ Generate immediately from a good description. Only ask ONE question if truly unc
           action={<button className="btn btn-primary" onClick={() => { setForm(blank); setConvo([]); setConvoInput(""); setConvoStep("idle"); setModal("ai"); }}><Plus size={13} /> New Design Task</button>} />
       ) : (
         project.design.map(d => (
-          <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", background: "#111318", border: "1px solid #1e2533", borderRadius: 8, marginBottom: 6, transition: "border-color .12s" }}
-            onMouseEnter={e => e.currentTarget.style.borderColor = "#252d40"} onMouseLeave={e => e.currentTarget.style.borderColor = "#1e2533"}>
+          <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 14px", background: "#ffffff", border: "1px solid #dfe1e6", borderRadius: 8, marginBottom: 6, transition: "border-color .12s" }}
+            onMouseEnter={e => e.currentTarget.style.borderColor = "#c1c7d0"} onMouseLeave={e => e.currentTarget.style.borderColor = "#dfe1e6"}>
             <span className="tag tag-Design" style={{ flexShrink: 0 }}>Design</span>
-            <span style={{ flex: 1, fontSize: 13, color: "#c8d4e8", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.title}</span>
+            <span style={{ flex: 1, fontSize: 13, color: "#344563", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.title}</span>
             <span className="tag tag-muted" style={{ fontSize: 10, flexShrink: 0 }}>{epicOf(d.epicId)}</span>
             <button className="icon-btn" onClick={() => { setForm(d); setConvo([]); setConvoStep("idle"); setModal("form"); }}><Edit2 size={13} /></button>
             <button className="icon-btn" onClick={() => del(d.id)}><Trash2 size={13} /></button>
@@ -1707,11 +2444,11 @@ Generate immediately from a good description. Only ask ONE question if truly unc
               ? <><button className="btn btn-ghost" onClick={() => setModal("form")}>Edit Fields →</button><button className="btn btn-primary" onClick={save}>Save Task</button></>
               : <button className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button>
           }>
-          <p style={{ fontSize: 13, color: "#5d6a85", marginBottom: 12, lineHeight: 1.6 }}>Describe what needs to be designed. The design team will define the how — keep it high-level.</p>
+          <p style={{ fontSize: 13, color: "#8993a4", marginBottom: 12, lineHeight: 1.6 }}>Describe what needs to be designed. The design team will define the how — keep it high-level.</p>
 
-          <div style={{ background: "#0d1018", border: "1px solid #1e2533", borderRadius: 10, overflow: "hidden", display: "flex", flexDirection: "column" }}>
+          <div style={{ background: "#f8f9fa", border: "1px solid #dfe1e6", borderRadius: 10, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             <div style={{ maxHeight: 300, overflowY: "auto", padding: "14px 14px 8px", minHeight: 60 }}>
-              {convo.length === 0 && <div style={{ fontSize: 12, color: "#3a4255", fontStyle: "italic" }}>e.g. "Login screen design for the auth epic — desktop and mobile, needs to match our brand"</div>}
+              {convo.length === 0 && <div style={{ fontSize: 12, color: "#b3bac5", fontStyle: "italic" }}>e.g. "Login screen design for the auth epic — desktop and mobile, needs to match our brand"</div>}
               {convo.map((m, i) => <div key={i} className={`ai-bubble ai-bubble-${m.role === "ai" ? "bot" : "user"}`}>
                 {m.text === "..." ? <div className="ai-typing"><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div> : m.text}
               </div>)}
@@ -1719,20 +2456,20 @@ Generate immediately from a good description. Only ask ONE question if truly unc
             </div>
 
             {convoStep === "preview" && (
-              <div style={{ borderTop: "1px solid #1e2533", padding: 14, background: "#0a0c10" }}>
+              <div style={{ borderTop: "1px solid #dfe1e6", padding: 14, background: "#f1f2f4" }}>
                 <div style={{ fontSize: 10, color: "#e8c547", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>Generated Brief</div>
-                <div style={{ fontWeight: 700, fontSize: 13, color: "#eef0f7", marginBottom: 6 }}>{form.title}</div>
+                <div style={{ fontWeight: 700, fontSize: 13, color: "#172b4d", marginBottom: 6 }}>{form.title}</div>
                 {[["Epic", epicOf(form.epicId)], ["Description", form.desc], ["Objective", form.objective], ["Scenarios", form.scenarios], ["Deliverables", form.deliverables]].map(([k, v]) => v && (
                   <div key={k} style={{ marginBottom: 6 }}>
-                    <span style={{ fontSize: 10, color: "#4a5568", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em" }}>{k}: </span>
-                    <span style={{ fontSize: 12, color: "#7080a0" }}>{v}</span>
+                    <span style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em" }}>{k}: </span>
+                    <span style={{ fontSize: 12, color: "#6b778c" }}>{v}</span>
                   </div>
                 ))}
               </div>
             )}
 
             {convoStep !== "preview" && (
-              <div style={{ display: "flex", gap: 8, padding: "10px 12px", borderTop: convo.length ? "1px solid #1e2533" : "none" }}>
+              <div style={{ display: "flex", gap: 8, padding: "10px 12px", borderTop: convo.length ? "1px solid #dfe1e6" : "none" }}>
                 <textarea value={convoInput} onChange={e => setConvoInput(e.target.value)}
                   onKeyDown={e => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), startOrSend())}
                   placeholder={convo.length === 0 ? "Describe the design task... (Enter to send)" : "Your answer... (Enter to send)"}
@@ -1765,15 +2502,25 @@ Generate immediately from a good description. Only ask ONE question if truly unc
 
 // ─── Team ─────────────────────────────────────────────────────────────────────
 function TeamSection({ project, update }) {
-  const [tab, setTab] = useState("members"); // members | holidays | vacations
+  const [tab, setTab] = useState("members");
   const [modal, setModal] = useState(null);
   const blank = { name: "", role: "", team: "FE", country: "Costa Rica" };
   const [form, setForm] = useState(blank);
   const [vacForm, setVacForm] = useState({ memberId: "", from: "", to: "", note: "" });
   const [showVacForm, setShowVacForm] = useState(false);
+  const [holForm, setHolForm] = useState({ date: "", name: "", country: "Costa Rica", type: "observance" });
+  const [showHolForm, setShowHolForm] = useState(false);
 
   const ALL_TEAMS = ["FE", "BE", "FS", "Mobile", "QA", "Designer"];
   const vacations = project.vacations || [];
+  const customHolidays = project.customHolidays || [];
+
+  // Merge base + custom holidays per country
+  const allHolidays = (country) => {
+    const base = (HOLIDAYS[country] || []).map(h => ({ ...h, custom: false }));
+    const custom = customHolidays.filter(h => h.country === country).map(h => ({ ...h, custom: true }));
+    return [...base, ...custom].sort((a, b) => a.date.localeCompare(b.date));
+  };
 
   const save = () => {
     if (!form.name.trim()) return;
@@ -1791,18 +2538,58 @@ function TeamSection({ project, update }) {
   };
   const delVac = id => update({ vacations: vacations.filter(v => v.id !== id) });
 
+  const saveHol = () => {
+    if (!holForm.date || !holForm.name) return;
+    if (holForm.id) {
+      update({ customHolidays: customHolidays.map(h => h.id === holForm.id ? holForm : h) });
+    } else {
+      update({ customHolidays: [...customHolidays, { ...holForm, id: uid() }] });
+    }
+    setHolForm({ date: "", name: "", country: "Costa Rica", type: "observance" });
+    setShowHolForm(false);
+  };
+  const delHol = id => update({ customHolidays: customHolidays.filter(h => h.id !== id) });
+
   const memberName = id => project.team.find(m => m.id === id)?.name || "—";
   const groups = ALL_TEAMS.map(t => ({ team: t, members: project.team.filter(m => m.team === t) })).filter(g => g.members.length);
 
-  const crHolidays = HOLIDAYS["Costa Rica"];
-  const usHolidays = HOLIDAYS["US"];
-
   const tabStyle = (t) => ({
-    padding: "7px 14px", background: tab === t ? "#15192a" : "transparent",
-    border: tab === t ? "1px solid #1e2533" : "1px solid transparent",
+    padding: "7px 14px", background: tab === t ? "#e8f0fe" : "transparent",
+    border: tab === t ? "1px solid #dfe1e6" : "1px solid transparent",
     borderRadius: 7, cursor: "pointer", fontSize: 12, fontWeight: tab === t ? 600 : 400,
-    color: tab === t ? "#eef0f7" : "#5d6a85", fontFamily: "'DM Sans',sans-serif", transition: "all .12s"
+    color: tab === t ? "#172b4d" : "#8993a4", fontFamily: "'DM Sans',sans-serif", transition: "all .12s"
   });
+
+  const HolidayCol = ({ country, flag, accent }) => {
+    const holidays = allHolidays(country);
+    return (
+      <div>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <span style={{ fontSize: 16 }}>{flag}</span>
+            <span style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 14, color: "#172b4d" }}>{country} 2025</span>
+            <span className="badge">{holidays.length}</span>
+          </div>
+          <button className="btn btn-ghost btn-xs" onClick={() => { setHolForm({ date: "", name: "", country, type: "observance" }); setShowHolForm(true); }}>
+            <Plus size={11} /> Add
+          </button>
+        </div>
+        {holidays.map(h => (
+          <div key={h.id || h.date} style={{ display: "flex", gap: 10, alignItems: "center", padding: "8px 12px", background: "#ffffff", border: "1px solid #dfe1e6", borderRadius: 7, marginBottom: 5 }}>
+            <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: accent, minWidth: 80, flexShrink: 0 }}>{h.date}</span>
+            <span style={{ flex: 1, fontSize: 12, color: "#344563" }}>{h.name}</span>
+            {h.type === "observance" && <span className="tag tag-muted" style={{ fontSize: 9 }}>observance</span>}
+            {h.custom && (
+              <>
+                <button className="icon-btn" style={{ padding: 3 }} onClick={() => { setHolForm({ ...h }); setShowHolForm(true); }}><Edit2 size={11} /></button>
+                <button className="icon-btn" style={{ padding: 3 }} onClick={() => delHol(h.id)}><Trash2 size={11} /></button>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+    );
+  };
 
   return (
     <div>
@@ -1812,7 +2599,6 @@ function TeamSection({ project, update }) {
         {tab === "vacations" && <button className="btn btn-primary" onClick={() => setShowVacForm(true)}><Plus size={13} /> Add Vacation</button>}
       </div>
 
-      {/* Tabs */}
       <div style={{ display: "flex", gap: 6, marginBottom: 24 }}>
         {[["members", "Members"], ["holidays", "Holidays"], ["vacations", "Vacations"]].map(([id, label]) => (
           <button key={id} style={tabStyle(id)} onClick={() => setTab(id)}>{label}</button>
@@ -1841,18 +2627,18 @@ function TeamSection({ project, update }) {
               <div key={t} style={{ marginBottom: 18 }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
                   <TeamTag team={t} />
-                  <span style={{ fontSize: 11, color: "#4a5568" }}>{members.length} member{members.length !== 1 ? "s" : ""}</span>
+                  <span style={{ fontSize: 11, color: "#97a0af" }}>{members.length} member{members.length !== 1 ? "s" : ""}</span>
                 </div>
                 {members.map(m => {
                   const memberVacs = vacations.filter(v => v.memberId === m.id);
                   return (
                     <div key={m.id} className="card" style={{ display: "flex", alignItems: "flex-start", gap: 14, padding: "14px 18px" }}>
-                      <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#181f2d", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 12, color: "#e8c547", flexShrink: 0 }}>
+                      <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#ebecf0", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 12, color: "#e8c547", flexShrink: 0 }}>
                         {m.name.split(" ").map(n => n[0]).join("").slice(0, 2)}
                       </div>
                       <div style={{ flex: 1 }}>
-                        <div style={{ fontWeight: 600, fontSize: 13, color: "#eef0f7" }}>{m.name}</div>
-                        <div style={{ fontSize: 11, color: "#5d6a85", marginTop: 2 }}>{m.role} · {m.country === "Costa Rica" ? "🇨🇷" : "🇺🇸"} {m.country}</div>
+                        <div style={{ fontWeight: 600, fontSize: 13, color: "#172b4d" }}>{m.name}</div>
+                        <div style={{ fontSize: 11, color: "#8993a4", marginTop: 2 }}>{m.role} · {m.country === "Costa Rica" ? "🇨🇷" : "🇺🇸"} {m.country}</div>
                         {memberVacs.length > 0 && (
                           <div style={{ marginTop: 6, display: "flex", gap: 6, flexWrap: "wrap" }}>
                             {memberVacs.map(v => <span key={v.id} className="chip" style={{ fontSize: 10 }}>🏖 {v.from} → {v.to}</span>)}
@@ -1872,32 +2658,40 @@ function TeamSection({ project, update }) {
 
       {/* ── Holidays tab ── */}
       {tab === "holidays" && (
-        <div className="two-col">
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-              <span style={{ fontSize: 16 }}>🇨🇷</span>
-              <span style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 14, color: "#eef0f7" }}>Costa Rica 2025</span>
-            </div>
-            {crHolidays.map(h => (
-              <div key={h.date} className="card" style={{ display: "flex", gap: 12, alignItems: "center", padding: "10px 14px", marginBottom: 6 }}>
-                <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: "#e8c547", minWidth: 80 }}>{h.date}</span>
-                <span style={{ fontSize: 13, color: "#c8d4e8" }}>{h.name}</span>
+        <>
+          {showHolForm && (
+            <div className="card" style={{ marginBottom: 16, borderColor: "rgba(232,197,71,.2)" }}>
+              <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 13, color: "#172b4d", marginBottom: 14 }}>
+                {holForm.id ? "Edit Holiday" : "Add Holiday / Observance"}
               </div>
-            ))}
-          </div>
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
-              <span style={{ fontSize: 16 }}>🇺🇸</span>
-              <span style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 14, color: "#eef0f7" }}>United States 2025</span>
-            </div>
-            {usHolidays.map(h => (
-              <div key={h.date} className="card" style={{ display: "flex", gap: 12, alignItems: "center", padding: "10px 14px", marginBottom: 6 }}>
-                <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: "#5ba4f5", minWidth: 80 }}>{h.date}</span>
-                <span style={{ fontSize: 13, color: "#c8d4e8" }}>{h.name}</span>
+              <div className="row">
+                <div className="field"><label>Date</label><input type="date" value={holForm.date} onChange={e => setHolForm(f => ({ ...f, date: e.target.value }))} /></div>
+                <div className="field"><label>Country</label>
+                  <select value={holForm.country} onChange={e => setHolForm(f => ({ ...f, country: e.target.value }))}>
+                    <option>Costa Rica</option><option>US</option>
+                  </select>
+                </div>
               </div>
-            ))}
+              <div className="row">
+                <div className="field" style={{ flex: 2 }}><label>Name</label><input value={holForm.name} onChange={e => setHolForm(f => ({ ...f, name: e.target.value }))} placeholder="e.g. Election Day Observance" /></div>
+                <div className="field"><label>Type</label>
+                  <select value={holForm.type} onChange={e => setHolForm(f => ({ ...f, type: e.target.value }))}>
+                    <option value="holiday">Holiday</option>
+                    <option value="observance">Observance</option>
+                  </select>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                <button className="btn btn-ghost" onClick={() => { setShowHolForm(false); setHolForm({ date: "", name: "", country: "Costa Rica", type: "observance" }); }}>Cancel</button>
+                <button className="btn btn-primary" onClick={saveHol} disabled={!holForm.date || !holForm.name}>Save</button>
+              </div>
+            </div>
+          )}
+          <div className="two-col">
+            <HolidayCol country="Costa Rica" flag="🇨🇷" accent="#e8c547" />
+            <HolidayCol country="US" flag="🇺🇸" accent="#0052cc" />
           </div>
-        </div>
+        </>
       )}
 
       {/* ── Vacations tab ── */}
@@ -1905,7 +2699,7 @@ function TeamSection({ project, update }) {
         <>
           {showVacForm && (
             <div className="card" style={{ marginBottom: 16, borderColor: "rgba(232,197,71,.2)" }}>
-              <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 13, color: "#eef0f7", marginBottom: 14 }}>New Vacation</div>
+              <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 13, color: "#172b4d", marginBottom: 14 }}>New Vacation</div>
               <div className="field">
                 <label>Team Member</label>
                 <select value={vacForm.memberId} onChange={e => setVacForm(f => ({ ...f, memberId: e.target.value }))}>
@@ -1917,7 +2711,7 @@ function TeamSection({ project, update }) {
                 <div className="field"><label>From</label><input type="date" value={vacForm.from} onChange={e => setVacForm(f => ({ ...f, from: e.target.value }))} /></div>
                 <div className="field"><label>To</label><input type="date" value={vacForm.to} onChange={e => setVacForm(f => ({ ...f, to: e.target.value }))} /></div>
               </div>
-              <div className="field"><label>Note (optional)</label><input value={vacForm.note} onChange={e => setVacForm(f => ({ ...f, note: e.target.value }))} placeholder="e.g. Approved, pending confirmation..." /></div>
+              <div className="field"><label>Note (optional)</label><input value={vacForm.note} onChange={e => setVacForm(f => ({ ...f, note: e.target.value }))} placeholder="e.g. Approved" /></div>
               <div style={{ display: "flex", gap: 8 }}>
                 <button className="btn btn-ghost" onClick={() => setShowVacForm(false)}>Cancel</button>
                 <button className="btn btn-primary" onClick={saveVac} disabled={!vacForm.memberId || !vacForm.from || !vacForm.to}>Save</button>
@@ -1929,12 +2723,12 @@ function TeamSection({ project, update }) {
           ) : (
             vacations.map(v => (
               <div key={v.id} className="card" style={{ display: "flex", alignItems: "center", gap: 14 }}>
-                <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#181f2d", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 11, color: "#e8c547", flexShrink: 0 }}>
+                <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#ebecf0", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 11, color: "#e8c547", flexShrink: 0 }}>
                   {memberName(v.memberId).split(" ").map(n => n[0]).join("").slice(0, 2)}
                 </div>
                 <div style={{ flex: 1 }}>
-                  <div style={{ fontWeight: 600, fontSize: 13, color: "#eef0f7" }}>{memberName(v.memberId)}</div>
-                  <div style={{ fontSize: 11, color: "#5d6a85", marginTop: 2, fontFamily: "'DM Mono',monospace" }}>{v.from} → {v.to} {v.note && `· ${v.note}`}</div>
+                  <div style={{ fontWeight: 600, fontSize: 13, color: "#172b4d" }}>{memberName(v.memberId)}</div>
+                  <div style={{ fontSize: 11, color: "#8993a4", marginTop: 2, fontFamily: "'DM Mono',monospace" }}>{v.from} → {v.to} {v.note && `· ${v.note}`}</div>
                 </div>
                 <button className="icon-btn" onClick={() => delVac(v.id)}><Trash2 size={13} /></button>
               </div>
@@ -1967,129 +2761,380 @@ function TeamSection({ project, update }) {
     </div>
   );
 }
-
 // ─── Sprint Planning ──────────────────────────────────────────────────────────
 function SprintSection({ project, update }) {
+  const nextMonday = () => {
+    const d = new Date();
+    const day = d.getDay();
+    const diff = day === 0 ? 1 : (8 - day) % 7 || 7;
+    d.setDate(d.getDate() + diff);
+    return d.toISOString().split("T")[0];
+  };
+  const addDays = (dateStr, n) => {
+    const d = new Date(dateStr); d.setDate(d.getDate() + n);
+    return d.toISOString().split("T")[0];
+  };
+
+  const [startDate, setStartDate] = useState(nextMonday);
+  const [endDate, setEndDate] = useState(() => addDays(nextMonday(), 13));
   const [selected, setSelected] = useState([]);
   const [generating, setGenerating] = useState(false);
   const [suggestion, setSuggestion] = useState(null);
+  const [editVelocity, setEditVelocity] = useState(false);
+  const [velForm, setVelForm] = useState({ velocity: project.velocity, designVelocity: project.designVelocity || 20 });
 
-  const unplanned = project.stories.filter(s => !selected.includes(s.id));
-  const planned = project.stories.filter(s => selected.includes(s.id));
-  const totalPts = planned.reduce((a, s) => a + (s.teamPts ?? s.aiPts ?? 0), 0);
-  const capacity = project.velocity;
-  const pct = Math.min(Math.round((totalPts / capacity) * 100), 100);
+  const allStories = project.stories;
+  const designTasks = project.design;
+  const planned = allStories.filter(s => selected.includes(s.id));
+  const unplanned = allStories.filter(s => !selected.includes(s.id));
+  const vacations = project.vacations || [];
+  const customHolidays = project.customHolidays || [];
 
+  const allHolidayDates = new Set([
+    ...(HOLIDAYS["Costa Rica"] || []).map(h => h.date),
+    ...(HOLIDAYS["US"] || []).map(h => h.date),
+    ...customHolidays.map(h => h.date),
+  ]);
+
+  const getWorkingDays = (start, end) => {
+    const days = []; const cur = new Date(start); const last = new Date(end);
+    while (cur <= last) {
+      const dow = cur.getDay(); const dateStr = cur.toISOString().split("T")[0];
+      if (dow !== 0 && dow !== 6 && !allHolidayDates.has(dateStr)) days.push(dateStr);
+      cur.setDate(cur.getDate() + 1);
+    }
+    return days;
+  };
+
+  const sprintWorkDays = startDate && endDate ? getWorkingDays(startDate, endDate) : [];
+  const totalWorkDays = sprintWorkDays.length;
+  const nominalDays = 10;
+  const dayRatio = totalWorkDays > 0 ? totalWorkDays / nominalDays : 1;
+  const adjustedDevCapacity = Math.round((project.velocity || 30) * dayRatio);
+  const adjustedDesignCapacity = Math.round((project.designVelocity || 20) * dayRatio);
+
+  const vacImpact = vacations.filter(v => {
+    const vs = new Date(v.from), ve = new Date(v.to);
+    const ss = new Date(startDate), se = new Date(endDate);
+    return vs <= se && ve >= ss;
+  }).map(v => {
+    const overlap = getWorkingDays(v.from > startDate ? v.from : startDate, v.to < endDate ? v.to : endDate);
+    const member = project.team.find(m => m.id === v.memberId);
+    return { name: member?.name || "Unknown", days: overlap.length };
+  }).filter(v => v.days > 0);
+
+  const sprintHolidays = [...(HOLIDAYS["Costa Rica"] || []), ...(HOLIDAYS["US"] || []), ...customHolidays]
+    .filter(h => h.date >= startDate && h.date <= endDate)
+    .sort((a, b) => a.date.localeCompare(b.date));
+
+  const devPts = planned.reduce((a, s) => a + (s.teamPts ?? s.aiPts ?? 0), 0);
+  const devPct = adjustedDevCapacity > 0 ? Math.round((devPts / adjustedDevCapacity) * 100) : 0;
+  const designCount = designTasks.length;
+  const designPct = Math.min(Math.round((designCount / Math.max(adjustedDesignCapacity / 5, 1)) * 100), 150);
+
+  const commitColor = pct => pct > 100 ? "#de350b" : pct >= 80 ? "#36b37e" : "#e8c547";
+  const commitLabel = pct => pct > 100 ? "Overcommitted" : pct >= 80 ? "On target" : "Underloaded";
   const toggle = id => setSelected(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
 
   const suggestSprint = async () => {
     setGenerating(true);
-    const storyList = project.stories.map(s => `- "${s.title}" (${s.teamPts ?? s.aiPts ?? "?"}pts)`).join("\n");
-    const result = await askClaude(
-      [{ role: "user", content: `Team velocity: ${project.velocity}pts/sprint. Stories:\n${storyList}\n\nSuggest which stories to include in the next sprint. Return a JSON array of story titles. Prioritize by business value and avoid overfilling. Return ONLY the JSON array.` }],
-      "You are a sprint planning expert. Return only valid JSON arrays of story title strings."
-    );
+    const vacLine = vacImpact.length ? "Vacations: " + vacImpact.map(v => v.name + " " + v.days + "d").join(", ") + ".\n" : "";
+    const storyLines = allStories.map(s => '- "' + s.title + '" (' + (s.teamPts ?? s.aiPts ?? "?") + "pts)").join("\n");
+    const context = "Dev capacity: " + adjustedDevCapacity + "pts (base " + project.velocity + "pt × " + dayRatio.toFixed(2) + " — " + totalWorkDays + " working days).\n" + vacLine + "Stories:\n" + storyLines;
+    const result = await askClaude([{ role: "user", content: `${context}\n\nSuggest which stories to include. Return ONLY a JSON array of story titles.` }], "Sprint planning expert. Return only valid JSON array.");
     setGenerating(false);
-    try {
-      const clean = result.replace(/```json?/g, "").replace(/```/g, "").trim();
-      const titles = JSON.parse(clean);
-      const ids = project.stories.filter(s => titles.some(t => s.title.includes(t) || t.includes(s.title.replace(/\[.*?\]/g, "").trim()))).map(s => s.id);
+    const parsed = parseJSON(result);
+    if (Array.isArray(parsed)) {
+      const ids = allStories.filter(s => parsed.some(t => s.title.includes(t) || t.includes(s.title.replace(/\[.*?\]/g, "").trim()))).map(s => s.id);
       setSelected(ids);
-      setSuggestion(`AI suggested ${ids.length} stories fitting within ${project.velocity}pt velocity.`);
-    } catch {
-      setSuggestion("Could not parse AI response. Please select stories manually.");
-    }
+      const pts = ids.reduce((a, id) => { const s = allStories.find(x => x.id === id); return a + (s?.teamPts ?? s?.aiPts ?? 0); }, 0);
+      setSuggestion(`AI suggested ${ids.length} stories (${pts}pt) for ${totalWorkDays} working days — ${adjustedDevCapacity}pt adjusted capacity.`);
+    } else setSuggestion("Could not parse response. Select manually.");
   };
 
-  const finishSprint = () => {
-    const sprint = { id: uid(), stories: planned.map(s => s.id), pts: totalPts, completedAt: new Date().toISOString().split("T")[0] };
-    update({ sprints: [...project.sprints, sprint] });
+  const [showComplete, setShowComplete] = useState(false);
+
+  const saveVelocity = () => { update({ velocity: Number(velForm.velocity) || 30, designVelocity: Number(velForm.designVelocity) || 20 }); setEditVelocity(false); };
+  const finishSprint = (completedIds) => {
+    const completedStories = allStories.filter(s => completedIds.includes(s.id));
+    const incompletedStories = allStories.filter(s => selected.includes(s.id) && !completedIds.includes(s.id));
+    const velocity = completedStories.reduce((a, s) => a + (s.teamPts ?? s.aiPts ?? 0), 0);
+    update({
+      sprints: [...project.sprints, {
+        id: uid(), completedStories: completedIds, incompletedStories: incompletedStories.map(s => s.id),
+        pts: velocity, startDate, endDate, completedAt: new Date().toISOString().split("T")[0]
+      }],
+      // Move incompleted stories back to top of backlog implicitly (they stay in stories, just not in sprint)
+    });
     setSelected([]);
     setSuggestion(null);
+    setShowComplete(false);
   };
+
+  const CommitBar = ({ label, pts, capacity, pct, accent }) => (
+    <div style={{ flex: 1 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6, alignItems: "baseline" }}>
+        <span style={{ fontSize: 11, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em" }}>{label}</span>
+        <span style={{ fontSize: 12, color: accent, fontWeight: 600 }}>{pts}/{capacity}{typeof pts === "number" ? "pt" : ""}</span>
+      </div>
+      <div style={{ height: 6, background: "#dfe1e6", borderRadius: 3, overflow: "hidden" }}>
+        <div style={{ height: "100%", width: `${Math.min(pct, 100)}%`, background: accent, borderRadius: 3, transition: "width .3s" }} />
+      </div>
+      <div style={{ marginTop: 5, display: "flex", alignItems: "center", gap: 6 }}>
+        <span style={{ fontSize: 11, color: accent, fontWeight: 600 }}>{pct}%</span>
+        <span style={{ fontSize: 11, color: "#97a0af" }}>— {commitLabel(pct)}</span>
+        {pct > 100 && <span style={{ fontSize: 10, color: "#de350b", background: "rgba(222,53,11,.08)", border: "1px solid rgba(222,53,11,.15)", borderRadius: 4, padding: "1px 6px", fontFamily: "'DM Mono',monospace" }}>OVERCOMMIT</span>}
+      </div>
+    </div>
+  );
 
   return (
     <div>
       <div className="sec-head">
         <div>
           <div className="sec-title">Sprint Planning</div>
-          <div className="sec-sub">Velocity: {project.velocity}pts/sprint · {project.team.length} team members</div>
+          <div style={{ fontSize: 12, color: "#97a0af", marginTop: 4, display: "flex", gap: 12, alignItems: "center" }}>
+            <span>Base velocity: <span style={{ color: "#e8c547" }}>{project.velocity}pt</span></span>
+            <span>Design: <span style={{ color: "#d6547e" }}>{project.designVelocity || 20}pt</span></span>
+            <button className="btn btn-ghost btn-xs" onClick={() => { setVelForm({ velocity: project.velocity, designVelocity: project.designVelocity || 20 }); setEditVelocity(true); }}><Edit2 size={10} /> Edit</button>
+          </div>
         </div>
         <div className="sec-actions">
-          <button className="btn btn-ai" onClick={suggestSprint} disabled={generating}>{generating ? "Analyzing..." : <><Sparkles size={13} /> AI Suggest Sprint</>}</button>
-          {selected.length > 0 && <button className="btn btn-primary" onClick={finishSprint}><Check size={13} /> Finish Sprint</button>}
+          <button className="btn btn-ai" onClick={suggestSprint} disabled={generating}>{generating ? "Analyzing..." : <><Sparkles size={13} /> AI Suggest</>}</button>
+          {selected.length > 0 && <button className="btn btn-primary" onClick={() => setShowComplete(true)}><Check size={13} /> Complete Sprint</button>}
         </div>
       </div>
 
-      <div style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 20, background: "#111318", border: "1px solid #1e2533", borderRadius: 10, padding: "14px 18px" }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 11, color: "#4a5568", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 5 }}>Sprint Load · {totalPts}/{capacity}pts</div>
-          <div className="progress-bar" style={{ height: 6 }}>
-            <div className="progress-fill" style={{ width: `${pct}%`, background: pct > 90 ? "#ff5757" : pct > 75 ? "#e8c547" : "#3be8a8" }} />
+      {/* Sprint dates */}
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", gap: 16, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div className="field" style={{ marginBottom: 0, minWidth: 150 }}><label>Sprint Start</label><input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} /></div>
+          <div className="field" style={{ marginBottom: 0, minWidth: 150 }}><label>Sprint End</label><input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} /></div>
+          <div style={{ display: "flex", gap: 20, paddingBottom: 2 }}>
+            <div><div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>Working Days</div><div style={{ fontSize: 20, fontFamily: "'Syne',sans-serif", fontWeight: 700, color: "#172b4d" }}>{totalWorkDays}</div></div>
+            <div><div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>Adj. Capacity</div><div style={{ fontSize: 20, fontFamily: "'Syne',sans-serif", fontWeight: 700, color: "#e8c547" }}>{adjustedDevCapacity}pt</div></div>
+            {vacImpact.length > 0 && <div><div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>Vacation Days</div><div style={{ fontSize: 20, fontFamily: "'Syne',sans-serif", fontWeight: 700, color: "#de350b" }}>{vacImpact.reduce((a, v) => a + v.days, 0)}</div></div>}
           </div>
         </div>
-        <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 20, color: pct > 90 ? "#ff5757" : "#eef0f7" }}>{pct}%</div>
+        {(sprintHolidays.length > 0 || vacImpact.length > 0) && (
+          <div style={{ marginTop: 14, paddingTop: 12, borderTop: "1px solid #dfe1e6", display: "flex", gap: 24, flexWrap: "wrap" }}>
+            {sprintHolidays.length > 0 && (
+              <div>
+                <div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 6 }}>Holidays in Sprint</div>
+                {sprintHolidays.map((h, i) => <div key={i} style={{ display: "flex", gap: 8, fontSize: 12, color: "#6b778c", marginBottom: 3 }}><span style={{ color: "#e8c547", fontFamily: "'DM Mono',monospace", fontSize: 11 }}>{h.date}</span><span>{h.name}</span></div>)}
+              </div>
+            )}
+            {vacImpact.length > 0 && (
+              <div>
+                <div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 6 }}>Vacations in Sprint</div>
+                {vacImpact.map((v, i) => <div key={i} style={{ display: "flex", gap: 8, fontSize: 12, color: "#6b778c", marginBottom: 3 }}><span style={{ color: "#de350b", fontFamily: "'DM Mono',monospace", fontSize: 11 }}>{v.days}d</span><span>{v.name}</span></div>)}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Capacity bars */}
+      <div style={{ display: "flex", gap: 16, background: "#ffffff", border: "1px solid #dfe1e6", borderRadius: 10, padding: "16px 20px", marginBottom: 20 }}>
+        <CommitBar label="Dev Team" pts={devPts} capacity={adjustedDevCapacity} pct={devPct} accent={commitColor(devPct)} />
+        <div style={{ width: 1, background: "#dfe1e6" }} />
+        <CommitBar label="Design Team" pts={`${designCount} tasks`} capacity={`${adjustedDesignCapacity}pt est.`} pct={designPct} accent={commitColor(designPct)} />
       </div>
 
       {suggestion && <div style={{ marginBottom: 16, padding: "10px 14px", background: "rgba(232,197,71,.08)", border: "1px solid rgba(232,197,71,.2)", borderRadius: 8, fontSize: 13, color: "#e8c547" }}>{suggestion}</div>}
 
-      <div style={{ display: "flex", gap: 14 }}>
-        <div className="sprint-lane" style={{ flex: 1 }}>
-          <div className="sprint-lane-title">Backlog ({unplanned.length})</div>
-          {unplanned.length === 0 && <div style={{ fontSize: 12, color: "#3a4255", textAlign: "center", padding: "20px 0" }}>All stories in sprint</div>}
-          {unplanned.map(s => (
-            <div key={s.id} className="sprint-item" onClick={() => toggle(s.id)}>
-              <div style={{ fontSize: 12, color: "#c8d4e8", marginBottom: 4 }}>{s.title}</div>
-              <div style={{ display: "flex", gap: 6 }}>
-                <span className="badge">{s.teamPts ?? s.aiPts ?? "?"}pts</span>
-                <span style={{ fontSize: 10, color: "#4a5568" }}>→ click to add</span>
+      {/* Sprint scope */}
+      <div style={{ marginBottom: 14 }}>
+        <div className="sprint-lane">
+          <div className="sprint-lane-title" style={{ color: devPct > 100 ? "#de350b" : "#e8c547" }}>Sprint · {devPts}pt{devPct > 100 ? " ⚠ over" : ""}</div>
+          {planned.length === 0 && <div style={{ fontSize: 12, color: "#b3bac5", textAlign: "center", padding: "20px 0" }}>No stories selected — click from backlog below</div>}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {planned.map(s => { const tag = s.title.match(/\[(FE|BE|FS|Mobile|QA|Designer)\]/)?.[1]; return (
+              <div key={s.id} className="sprint-item" style={{ borderColor: devPct > 100 ? "rgba(222,53,11,.2)" : "rgba(232,197,71,.2)", minWidth: 200, flex: "1 1 200px" }} onClick={() => toggle(s.id)}>
+                <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>{tag && <TeamTag team={tag} />}<span style={{ fontSize: 12, color: "#344563", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.title.replace(/\[.*?\]\s*/, "")}</span></div>
+                <div style={{ display: "flex", gap: 6 }}><span className="badge badge-accent">{s.teamPts ?? s.aiPts ?? "?"}pts</span><span style={{ fontSize: 10, color: "#8993a4" }}>× remove</span></div>
               </div>
-            </div>
-          ))}
+            ); })}
+          </div>
         </div>
-        <div className="sprint-lane" style={{ flex: 1 }}>
-          <div className="sprint-lane-title" style={{ color: "#e8c547" }}>Sprint ({planned.length} stories)</div>
-          {planned.length === 0 && <div style={{ fontSize: 12, color: "#3a4255", textAlign: "center", padding: "20px 0" }}>No stories selected</div>}
-          {planned.map(s => (
-            <div key={s.id} className="sprint-item" style={{ borderColor: "rgba(232,197,71,.2)" }} onClick={() => toggle(s.id)}>
-              <div style={{ fontSize: 12, color: "#c8d4e8", marginBottom: 4 }}>{s.title}</div>
-              <div style={{ display: "flex", gap: 6 }}>
-                <span className="badge badge-accent">{s.teamPts ?? s.aiPts ?? "?"}pts</span>
-                <span style={{ fontSize: 10, color: "#5d6a85" }}>× click to remove</span>
-              </div>
+      </div>
+
+      {/* Backlog */}
+      <div className="sprint-lane">
+        <div className="sprint-lane-title">Backlog ({unplanned.length})</div>
+        {unplanned.length === 0 && <div style={{ fontSize: 12, color: "#b3bac5", textAlign: "center", padding: "20px 0" }}>All stories in sprint</div>}
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {unplanned.map(s => { const tag = s.title.match(/\[(FE|BE|FS|Mobile|QA|Designer)\]/)?.[1]; return (
+            <div key={s.id} className="sprint-item" style={{ minWidth: 200, flex: "1 1 200px" }} onClick={() => toggle(s.id)}>
+              <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>{tag && <TeamTag team={tag} />}<span style={{ fontSize: 12, color: "#344563", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.title.replace(/\[.*?\]\s*/, "")}</span></div>
+              <div style={{ display: "flex", gap: 6 }}><span className="badge">{s.teamPts ?? s.aiPts ?? "?"}pts</span><span style={{ fontSize: 10, color: "#97a0af" }}>→ add</span></div>
             </div>
-          ))}
+          ); })}
         </div>
       </div>
 
       {project.sprints.length > 0 && (
         <div style={{ marginTop: 24 }}>
-          <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 14, color: "#eef0f7", marginBottom: 12 }}>Sprint History</div>
-          {project.sprints.map((sp, i) => (
-            <div key={sp.id} className="card" style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 18px" }}>
-              <span className="tag tag-green">Sprint {i + 1}</span>
-              <span style={{ fontSize: 13, color: "#8090a8" }}>{sp.stories.length} stories · {sp.pts}pts</span>
-              <span style={{ flex: 1 }} />
-              <span style={{ fontSize: 11, color: "#4a5568", fontFamily: "'DM Mono',monospace" }}>{sp.completedAt}</span>
-              <CheckCircle2 size={14} color="#3be8a8" />
+          <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 14, color: "#172b4d", marginBottom: 12 }}>Sprint History</div>
+          {project.sprints.map((sp, i) => {
+            const completed = sp.completedStories?.length ?? sp.stories?.length ?? 0;
+            const incompleted = sp.incompletedStories?.length ?? 0;
+            return (
+              <div key={sp.id} className="card" style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 18px" }}>
+                <span className="tag tag-green">Sprint {i + 1}</span>
+                <span style={{ fontSize: 13, color: "#505f79" }}>{completed} done · <span style={{ color: "#e8c547", fontWeight: 600 }}>{sp.pts}pt</span></span>
+                {incompleted > 0 && <span style={{ fontSize: 12, color: "#e8c547" }}>{incompleted} not done</span>}
+                {sp.startDate && <span style={{ fontSize: 11, color: "#97a0af", fontFamily: "'DM Mono',monospace" }}>{sp.startDate} → {sp.endDate}</span>}
+                <span style={{ flex: 1 }} />
+                <CheckCircle2 size={14} color="#36b37e" />
+              </div>
+            );
+          })}
+          {project.sprints.length > 1 && (
+            <div style={{ marginTop: 10, padding: "10px 14px", background: "#f8f9fa", border: "1px solid #dfe1e6", borderRadius: 8, display: "flex", gap: 20 }}>
+              <div><div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>Avg Velocity</div><div style={{ fontSize: 18, fontFamily: "'Syne',sans-serif", fontWeight: 700, color: "#e8c547" }}>{Math.round(project.sprints.reduce((a, s) => a + s.pts, 0) / project.sprints.length)}pt</div></div>
+              <div><div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>Total Sprints</div><div style={{ fontSize: 18, fontFamily: "'Syne',sans-serif", fontWeight: 700, color: "#172b4d" }}>{project.sprints.length}</div></div>
+              <div><div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>Total Delivered</div><div style={{ fontSize: 18, fontFamily: "'Syne',sans-serif", fontWeight: 700, color: "#36b37e" }}>{project.sprints.reduce((a, s) => a + s.pts, 0)}pt</div></div>
             </div>
-          ))}
+          )}
         </div>
       )}
+
+      {editVelocity && (
+        <Modal title="Edit Base Velocity" onClose={() => setEditVelocity(false)}
+          footer={<><button className="btn btn-ghost" onClick={() => setEditVelocity(false)}>Cancel</button><button className="btn btn-primary" onClick={saveVelocity}>Save</button></>}>
+          <p style={{ fontSize: 13, color: "#8993a4", marginBottom: 16, lineHeight: 1.6 }}>Set your baseline per 2-week sprint. The planner adjusts automatically based on working days, holidays, and vacations.</p>
+          <div className="row">
+            <div className="field"><label>Dev Team (pts / 2-week sprint)</label><input type="number" value={velForm.velocity} onChange={e => setVelForm(f => ({ ...f, velocity: e.target.value }))} /></div>
+            <div className="field"><label>Design Team (pts / 2-week sprint)</label><input type="number" value={velForm.designVelocity} onChange={e => setVelForm(f => ({ ...f, designVelocity: e.target.value }))} /></div>
+          </div>
+        </Modal>
+      )}
+
+      {showComplete && (
+        <SprintCompleteModal
+          planned={planned}
+          startDate={startDate}
+          endDate={endDate}
+          onComplete={finishSprint}
+          onClose={() => setShowComplete(false)}
+        />
+      )}
     </div>
+  );
+}
+
+// ─── Sprint Complete Modal ────────────────────────────────────────────────────
+function SprintCompleteModal({ planned, startDate, endDate, onComplete, onClose }) {
+  const [completed, setCompleted] = useState(new Set(planned.map(s => s.id)));
+
+  const toggle = id => setCompleted(prev => {
+    const next = new Set(prev);
+    next.has(id) ? next.delete(id) : next.add(id);
+    return next;
+  });
+
+  const completedPts = planned.filter(s => completed.has(s.id)).reduce((a, s) => a + (s.teamPts ?? s.aiPts ?? 0), 0);
+  const totalPts = planned.reduce((a, s) => a + (s.teamPts ?? s.aiPts ?? 0), 0);
+  const incompletedCount = planned.length - completed.size;
+
+  return (
+    <Modal wide title="Complete Sprint" onClose={onClose}
+      footer={
+        <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
+          <div style={{ fontSize: 12, color: "#8993a4" }}>
+            <span style={{ color: "#36b37e", fontWeight: 600 }}>{completed.size} completed</span>
+            {incompletedCount > 0 && <span> · <span style={{ color: "#e8c547" }}>{incompletedCount} back to backlog</span></span>}
+            <span> · <span style={{ color: "#172b4d", fontWeight: 600 }}>{completedPts}pt</span> velocity</span>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+            <button className="btn btn-primary" onClick={() => onComplete([...completed])}>
+              <Check size={13} /> Save Sprint
+            </button>
+          </div>
+        </div>
+      }>
+
+      <p style={{ fontSize: 13, color: "#8993a4", marginBottom: 6, lineHeight: 1.6 }}>
+        All stories are marked completed by default. Uncheck any that didn't make it — they'll go back to the backlog.
+      </p>
+      {startDate && <div style={{ fontSize: 11, color: "#97a0af", fontFamily: "'DM Mono',monospace", marginBottom: 16 }}>{startDate} → {endDate}</div>}
+
+      <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginBottom: 12 }}>
+        <button className="btn btn-ghost btn-xs" onClick={() => setCompleted(new Set(planned.map(s => s.id)))}>Mark all done</button>
+        <button className="btn btn-ghost btn-xs" onClick={() => setCompleted(new Set())}>Clear all</button>
+      </div>
+
+      {planned.map(s => {
+        const tag = s.title.match(/\[(FE|BE|FS|Mobile|QA|Designer)\]/)?.[1];
+        const done = completed.has(s.id);
+        return (
+          <div key={s.id} onClick={() => toggle(s.id)} style={{ display: "flex", alignItems: "center", gap: 12, padding: "10px 14px", background: done ? "rgba(59,232,168,.05)" : "#f8f9fa", border: "1px solid " + (done ? "rgba(54,179,126,.2)" : "#dfe1e6"), borderRadius: 8, marginBottom: 6, cursor: "pointer", transition: "all .12s" }}>
+            <div style={{ width: 18, height: 18, borderRadius: 4, border: "1.5px solid " + (done ? "#36b37e" : "#b3bac5"), background: done ? "#36b37e" : "transparent", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0, transition: "all .12s" }}>
+              {done && <Check size={11} color="#f8f9fa" strokeWidth={3} />}
+            </div>
+            {tag && <TeamTag team={tag} />}
+            <span style={{ flex: 1, fontSize: 13, color: done ? "#344563" : "#6b778c", textDecoration: done ? "none" : "none", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.title}</span>
+            <span className={done ? "pts-chip pts-team" : "pts-chip pts-empty"} style={{ flexShrink: 0 }}>
+              {done ? <><Check size={9} /> </> : ""}{s.teamPts ?? s.aiPts ?? "?"}pt
+            </span>
+          </div>
+        );
+      })}
+    </Modal>
   );
 }
 
 // ─── AI Colleague ─────────────────────────────────────────────────────────────
 function AISection({ project, update }) {
   const [msgs, setMsgs] = useState([
-    { role: "ai", text: `Hi! I'm your AI colleague for **${project.name}**. I can help you analyze meeting notes, suggest stories, identify gaps, or update project rules. What would you like to work on?` }
+    { role: "ai", text: `Hi! I'm your AI colleague for **${project.name}**.\n\nI can help you analyze meeting notes, identify gaps, update project rules — and I can also **create stories, bugs, epics, and design tasks** directly from our conversation.\n\nJust tell me what you need.` }
   ]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [pending, setPending] = useState(null); // { type, items[] } awaiting confirmation
   const bottomRef = useRef(null);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, pending]);
 
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs]);
+  const epicList = project.epics.map(e => `id:${e.id} → "${e.title}"`).join(", ") || "none";
+  const teamTags = [...new Set(project.team.map(t => t.team).filter(t => t !== "QA"))].join(", ") || "FE, BE, FS";
+
+  const FENCE = "```";
+  const SYSTEM = `You are a senior PM AI colleague embedded in a product management tool.
+
+Project: ${project.name} (${project.platform}, ${project.type}, ${project.industry})
+Team velocity: ${project.velocity}pts. Epics: ${project.epics.map(e => e.title).join(", ") || "none"}.
+Stories: ${project.stories.length}. Bugs: ${project.bugs.length}. Open design tasks: ${project.design.length}.
+AI Rules: ${project.aiRules.join("; ") || "none"}.
+Available epics: ${epicList}
+Available team tags: ${teamTags}
+
+You can:
+1. Analyze and discuss — just reply normally
+2. Create artifacts — when the user wants to create something, output a special block
+
+To CREATE artifacts, include this block in your reply (after any explanation):
+
+ARTIFACTS:
+${FENCE}json
+{
+  "type": "stories|bugs|epics|design",
+  "items": [
+    { ...fields... }
+  ]
+}
+${FENCE}
+
+Story fields: { title, epicId, description, ac, aiPts }
+Bug fields: { title, steps, expected, current, suggestions }
+Epic fields: { title, description }
+Design fields: { title, epicId, desc, objective, scenarios, deliverables }
+
+AC format for stories: "Scenario\nGIVEN | ...\nWHEN | ...\nTHEN | ...\n---\nScenario2\n..."
+
+RULE UPDATE: prefix to track new project rules.
+Be concise. Ask before creating if requirements are unclear.`;
 
   const send = async () => {
     const text = input.trim();
@@ -2099,323 +3144,1350 @@ function AISection({ project, update }) {
     setMsgs([...newMsgs, { role: "ai", text: "..." }]);
     setLoading(true);
 
-    const projectContext = `Project: ${project.name} (${project.platform}, ${project.type}, ${project.industry}). Team: ${project.teamSize}. Velocity: ${project.velocity}pts. Epics: ${project.epics.map(e => e.title).join(", ")}. Stories: ${project.stories.length}. Bugs: ${project.bugs.length}. Current rules: ${project.aiRules.join("; ") || "none"}.`;
-    const history = newMsgs.slice(-8).map(m => ({ role: m.role === "ai" ? "assistant" : "user", content: m.text }));
-
-    const reply = await askClaude(history,
-      `You are an AI PM colleague embedded in a product management tool. ${projectContext}\n\nYou help by: analyzing meeting notes, suggesting stories, identifying gaps, and adapting project rules. Be concise and structured. If the user wants to update a rule (e.g. "our stories should now include X"), acknowledge it clearly with "RULE UPDATE: ..." so it can be tracked.`
-    );
+    const history = newMsgs.slice(-10).map(m => ({ role: m.role === "ai" ? "assistant" : "user", content: m.text }));
+    const reply = await askClaude(history, SYSTEM, 2000);
     setLoading(false);
+
+    // Parse ARTIFACTS block if present
+    const artifactMatch = reply.match(/ARTIFACTS:\s*```(?:json)?\s*([\s\S]*?)```/);
+    if (artifactMatch) {
+      try {
+        const parsed = JSON.parse(artifactMatch[1].trim());
+        if (parsed.type && Array.isArray(parsed.items) && parsed.items.length > 0) {
+          const cleanReply = reply.replace(/ARTIFACTS:\s*```[\s\S]*?```/, "").trim();
+          setMsgs(prev => [...prev.slice(0, -1), { role: "ai", text: cleanReply || `I've prepared ${parsed.items.length} ${parsed.type} for you to review:` }]);
+          setPending(parsed);
+          setLoading(false);
+          return;
+        }
+      } catch {}
+    }
+
     setMsgs(prev => [...prev.slice(0, -1), { role: "ai", text: reply }]);
 
     if (reply.includes("RULE UPDATE:")) {
-      const ruleMatch = reply.match(/RULE UPDATE:\s*(.+)/);
-      if (ruleMatch) update({ aiRules: [...project.aiRules, ruleMatch[1].trim()] });
+      const m = reply.match(/RULE UPDATE:\s*(.+)/);
+      if (m) update({ aiRules: [...project.aiRules, m[1].trim()] });
     }
   };
 
+  const acceptArtifacts = () => {
+    if (!pending) return;
+    const { type, items } = pending;
+    if (type === "stories") {
+      const newStories = items.map(s => ({ ...s, id: uid(), teamPts: null, design: "", oos: s.oos || "", deps: "", blockers: "" }));
+      update({ stories: [...project.stories, ...newStories] });
+      setMsgs(prev => [...prev, { role: "ai", text: `✓ Added ${newStories.length} stor${newStories.length > 1 ? "ies" : "y"} to your backlog.` }]);
+    } else if (type === "bugs") {
+      const newBugs = items.map(b => ({ ...b, id: uid(), evidence: "" }));
+      update({ bugs: [...project.bugs, ...newBugs] });
+      setMsgs(prev => [...prev, { role: "ai", text: `✓ Added ${newBugs.length} bug${newBugs.length > 1 ? "s" : ""} to the bug tracker.` }]);
+    } else if (type === "epics") {
+      const newEpics = items.map(e => ({ ...e, id: uid(), stories: 0 }));
+      update({ epics: [...project.epics, ...newEpics] });
+      setMsgs(prev => [...prev, { role: "ai", text: `✓ Added ${newEpics.length} epic${newEpics.length > 1 ? "s" : ""} to your project.` }]);
+    } else if (type === "design") {
+      const newTasks = items.map(d => ({ ...d, id: uid(), links: "" }));
+      update({ design: [...project.design, ...newTasks] });
+      setMsgs(prev => [...prev, { role: "ai", text: `✓ Added ${newTasks.length} design task${newTasks.length > 1 ? "s" : ""}.` }]);
+    }
+    setPending(null);
+  };
+
+  const rejectArtifacts = () => {
+    setMsgs(prev => [...prev, { role: "ai", text: "Got it — I've discarded those. Let me know how you'd like to adjust them." }]);
+    setPending(null);
+  };
+
   const quickPrompts = [
-    "What are the biggest risks in this project?",
-    "Identify gaps in our epic coverage",
-    "Suggest 3 stories for the next sprint",
-    "How healthy is our current backlog?",
+    "Analyze this: [paste meeting notes]",
+    "What gaps do we have in our epics?",
+    "Create stories for the login epic",
+    "What are the biggest risks right now?",
   ];
+
+  const ArtifactPreview = ({ pending }) => {
+    const { type, items } = pending;
+    const typeLabel = { stories: "Story", bugs: "Bug", epics: "Epic", design: "Design Task" }[type] || type;
+    return (
+      <div style={{ margin: "12px 0 8px", background: "#f8f9fa", border: "1px solid rgba(232,197,71,.25)", borderRadius: 10, overflow: "hidden" }}>
+        <div style={{ padding: "10px 14px", background: "rgba(232,197,71,.12)", borderBottom: "1px solid rgba(232,197,71,.15)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Sparkles size={13} color="#e8c547" />
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#e8c547" }}>{items.length} {typeLabel}{items.length > 1 ? "s" : ""} ready to add</span>
+          </div>
+          <div style={{ display: "flex", gap: 6 }}>
+            <button className="btn btn-ghost btn-xs" onClick={rejectArtifacts}><X size={11} /> Discard</button>
+            <button className="btn btn-primary btn-xs" onClick={acceptArtifacts}><Check size={11} /> Add to Project</button>
+          </div>
+        </div>
+        <div style={{ padding: "10px 14px", maxHeight: 280, overflowY: "auto" }}>
+          {items.map((item, i) => (
+            <div key={i} style={{ padding: "8px 0", borderBottom: i < items.length - 1 ? "1px solid #dfe1e6" : "none" }}>
+              <div style={{ fontWeight: 600, fontSize: 13, color: "#172b4d", marginBottom: 3 }}>{item.title}</div>
+              {item.description && <div style={{ fontSize: 12, color: "#6b778c", fontStyle: "italic", marginBottom: 3 }}>{item.description}</div>}
+              {item.desc && <div style={{ fontSize: 12, color: "#6b778c", marginBottom: 3 }}>{item.desc}</div>}
+              {item.steps && <div style={{ fontSize: 11, color: "#8993a4", fontFamily: "'DM Mono',monospace" }}>Steps: {item.steps.slice(0, 80)}...</div>}
+              {item.aiPts && <span className="pts-chip pts-ai" style={{ marginTop: 4, display: "inline-flex" }}><Sparkles size={9} /> {item.aiPts}pt</span>}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
 
   return (
     <div>
       <div className="sec-head">
         <div>
           <div className="sec-title">AI Colleague</div>
-          <div className="sec-sub">Conversational PM assistant · adapts to your project rules</div>
+          <div className="sec-sub">Conversational PM assistant — can create stories, bugs, epics & design tasks</div>
         </div>
         {project.aiRules.length > 0 && (
           <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#e8c547" }}>
-            <Shield size={12} /> {project.aiRules.length} active rule{project.aiRules.length !== 1 ? "s" : ""}
+            <Shield size={12} /> {project.aiRules.length} rule{project.aiRules.length !== 1 ? "s" : ""}
           </div>
         )}
       </div>
 
       {project.aiRules.length > 0 && (
-        <div style={{ marginBottom: 16, padding: "10px 14px", background: "rgba(232,197,71,.06)", border: "1px solid rgba(232,197,71,.15)", borderRadius: 8 }}>
+        <div style={{ marginBottom: 16, padding: "10px 14px", background: "rgba(232,197,71,.1)", border: "1px solid rgba(232,197,71,.15)", borderRadius: 8 }}>
           <div style={{ fontSize: 10, color: "#e8c547", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 5 }}>Active Project Rules</div>
-          {project.aiRules.map((r, i) => <div key={i} style={{ fontSize: 12, color: "#c8b870", marginBottom: 2 }}>• {r}</div>)}
+          {project.aiRules.map((r, i) => <div key={i} style={{ fontSize: 12, color: "#7a6000", marginBottom: 2 }}>• {r}</div>)}
         </div>
       )}
 
-      <div style={{ background: "#111318", border: "1px solid #1e2533", borderRadius: 12, overflow: "hidden", display: "flex", flexDirection: "column", height: 480 }}>
+      <div style={{ background: "#ffffff", border: "1px solid #dfe1e6", borderRadius: 12, overflow: "hidden", display: "flex", flexDirection: "column", height: 520 }}>
         <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 8px" }}>
           {msgs.map((m, i) => (
             <div key={i} className={`ai-bubble ai-bubble-${m.role === "ai" ? "bot" : "user"}`}>
               {m.text === "..." ? <div className="ai-typing"><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div> : m.text}
             </div>
           ))}
+          {pending && <ArtifactPreview pending={pending} />}
           <div ref={bottomRef} />
         </div>
-        {msgs.length <= 2 && (
-          <div style={{ padding: "8px 16px", display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {msgs.length <= 1 && !pending && (
+          <div style={{ padding: "8px 14px", display: "flex", gap: 8, flexWrap: "wrap", borderTop: "1px solid #dfe1e6" }}>
             {quickPrompts.map(p => (
-              <button key={p} className="btn btn-ghost btn-sm" onClick={() => { setInput(p); }}>{p}</button>
+              <button key={p} className="btn btn-ghost btn-sm" onClick={() => setInput(p)}>{p}</button>
             ))}
           </div>
         )}
-        <div style={{ display: "flex", gap: 8, padding: "12px", borderTop: "1px solid #1e2533" }}>
-          <textarea value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), send())}
-            placeholder="Ask anything about your project... (Enter to send)" style={{ minHeight: "unset", height: 40, padding: "10px 12px", resize: "none", flex: 1 }} />
+        <div style={{ display: "flex", gap: 8, padding: "12px", borderTop: "1px solid #dfe1e6" }}>
+          <textarea value={input} onChange={e => setInput(e.target.value)}
+            onKeyDown={e => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), send())}
+            placeholder="Ask anything, paste meeting notes, or say 'create stories for X'... (Enter to send)"
+            style={{ minHeight: "unset", height: 40, padding: "10px 12px", resize: "none", flex: 1 }} />
           <button className="btn btn-primary" onClick={send} disabled={loading || !input.trim()} style={{ padding: "8px 14px" }}><Send size={13} /></button>
         </div>
       </div>
     </div>
   );
 }
-
 // ─── New Project Modal ────────────────────────────────────────────────────────
 function NewProjectModal({ onClose, onCreate }) {
+  const [mode, setMode] = useState(null); // null = choose, "delivery", "discovery"
+
+  if (!mode) {
+    return (
+      <Modal title="New Project" onClose={onClose}>
+        <p style={{ fontSize: 13, color: "#6b778c", marginBottom: 20, lineHeight: 1.65 }}>
+          What kind of project is this?
+        </p>
+        <div style={{ display: "flex", gap: 14 }}>
+          {[
+            {
+              id: "delivery",
+              label: "Delivery Project",
+              desc: "You know what you're building. Manage stories, sprints, bugs, and the team.",
+              icon: <Rocket size={28} color="#0052cc" />,
+              border: "#b3d4ff", bg: "#e6f0ff",
+            },
+            {
+              id: "discovery",
+              label: "Discovery Project",
+              desc: "You're figuring out what to build. Run sessions, map stories, estimate, and present to the client.",
+              icon: <Compass size={28} color="#7a6000" />,
+              border: "#ffe999", bg: "#fff8e1",
+            },
+          ].map(opt => (
+            <button key={opt.id} onClick={() => setMode(opt.id)} style={{
+              flex: 1, textAlign: "left", padding: "20px", background: opt.bg,
+              border: "2px solid " + opt.border, borderRadius: 12, cursor: "pointer",
+              fontFamily: "'DM Sans',sans-serif", transition: "all .15s",
+            }}
+              onMouseEnter={e => { e.currentTarget.style.transform = "translateY(-2px)"; e.currentTarget.style.boxShadow = "0 4px 16px rgba(9,30,66,.12)"; }}
+              onMouseLeave={e => { e.currentTarget.style.transform = "none"; e.currentTarget.style.boxShadow = "none"; }}>
+              <div style={{ marginBottom: 12 }}>{opt.icon}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne',sans-serif", marginBottom: 6 }}>{opt.label}</div>
+              <div style={{ fontSize: 12, color: "#505f79", lineHeight: 1.55 }}>{opt.desc}</div>
+            </button>
+          ))}
+        </div>
+      </Modal>
+    );
+  }
+
+  if (mode === "delivery") return <DeliveryProjectModal onClose={onClose} onCreate={onCreate} onBack={() => setMode(null)} />;
+  if (mode === "discovery") return <DiscoveryProjectModal onClose={onClose} onCreate={onCreate} onBack={() => setMode(null)} />;
+}
+
+function DeliveryProjectModal({ onClose, onCreate, onBack }) {
   const [step, setStep] = useState(0);
-  const [answers, setAnswers] = useState({
-    idea: "", platform: "", type: "", industry: "",
-    teamSize: "", constraints: "", definition: "",
-  });
+  const [answers, setAnswers] = useState({ idea: "", platform: "", type: "", industry: "", teamSize: "", constraints: "", definition: "" });
   const [projectName, setProjectName] = useState("");
   const [generating, setGenerating] = useState(false);
 
   const questions = [
-    {
-      label: "The Idea",
-      key: "idea",
-      q: "What are you building and why?",
-      sub: "Describe the product, the problem it solves, and who it's for. Be as detailed or as rough as you want — this is the foundation of everything.",
-      placeholder: "e.g. An internal tool for our finance team to replace manual Excel-based reporting. Right now they spend 3 days per month consolidating data from 4 systems. We want to centralize that into a single dashboard with automated report generation and approval workflows...",
-      multiline: true,
-    },
-    {
-      label: "Platform",
-      key: "platform",
-      q: "Where will it live?",
-      sub: "Choose the primary platform for this product.",
-      options: ["Web", "Mobile", "Both"],
-    },
-    {
-      label: "Project Type",
-      key: "type",
-      q: "Are you starting from scratch or improving something existing?",
-      sub: null,
-      options: ["Greenfield — building from zero", "Existing — improving or extending a product"],
-    },
-    {
-      label: "Industry & Domain",
-      key: "industry",
-      q: "What industry or domain?",
-      sub: "Helps scope assumptions, compliance needs, and terminology.",
-      placeholder: "e.g. FinTech, Healthcare, Internal Operations, E-commerce, EdTech...",
-    },
-    {
-      label: "Team",
-      key: "teamSize",
-      q: "Who's on the team?",
-      sub: "Rough composition is enough — helps with capacity planning.",
-      placeholder: "e.g. 8 people: 3 FE, 2 BE, 1 FS, 1 Mobile, 1 PM",
-    },
-    {
-      label: "Constraints",
-      key: "constraints",
-      q: "Any known constraints or hard requirements?",
-      sub: "Timelines, tech stack limits, integrations, compliance, budget, etc.",
-      placeholder: "e.g. Must launch by Q3, must integrate with SAP, HIPAA compliance required, no new cloud providers...",
-    },
-    {
-      label: "Definition Level",
-      key: "definition",
-      q: "How well-defined is the scope right now?",
-      sub: "This determines how much structure the AI will help you fill in.",
-      options: [
-        "Clear — requirements are documented and aligned",
-        "Exploratory — still discovering what to build",
-        "Mixed — some areas clear, others open",
-      ],
-    },
+    { label: "The Idea", key: "idea", q: "What are you building and why?", sub: "Describe the product, the problem it solves, and who it's for. The more detail, the better the AI output.", placeholder: "e.g. An internal tool for our finance team to replace manual Excel-based reporting...", multiline: true },
+    { label: "Platform", key: "platform", q: "Where will it live?", sub: null, options: ["Web", "Mobile", "Both"] },
+    { label: "Project Type", key: "type", q: "Starting from scratch or improving something?", sub: null, options: ["Greenfield — building from zero", "Existing — improving or extending a product"] },
+    { label: "Industry", key: "industry", q: "What industry or domain?", sub: "Helps scope assumptions, compliance needs, and terminology.", placeholder: "e.g. FinTech, Healthcare, Internal Operations, E-commerce..." },
+    { label: "Team", key: "teamSize", q: "Who's on the team?", sub: "Rough composition is enough — helps with capacity planning.", placeholder: "e.g. 8 people: 3 FE, 2 BE, 1 FS, 1 Mobile, 1 PM" },
+    { label: "Constraints", key: "constraints", q: "Any known constraints?", sub: "Timelines, tech stack, integrations, compliance, budget, etc.", placeholder: "e.g. Must launch by Q3, must integrate with SAP, HIPAA compliance required..." },
+    { label: "Definition", key: "definition", q: "How well-defined is the scope right now?", sub: null, options: ["Clear — requirements are documented", "Exploratory — still discovering", "Mixed — some clear, some open"] },
   ];
 
   const cur = questions[step];
   const val = answers[cur.key];
   const isLast = step === questions.length - 1;
-
-  const next = () => {
-    if (!val.trim()) return;
-    if (!isLast) setStep(s => s + 1);
-    else generate();
-  };
-  const prev = () => setStep(s => s - 1);
+  const next = () => { if (!val.trim()) return; if (!isLast) setStep(s => s + 1); else generate(); };
+  const prev = () => step === 0 ? onBack() : setStep(s => s - 1);
 
   const generate = async () => {
     setGenerating(true);
-    const prompt = `You are a senior PM creating a structured project overview.
-
-Product idea: "${answers.idea}"
-Platform: ${answers.platform}
-Type: ${answers.type}
-Industry: ${answers.industry}
-Team: ${answers.teamSize}
-Constraints: ${answers.constraints}
-Definition level: ${answers.definition}
-Project name provided: "${projectName}"
-
-Return ONLY a valid JSON object (no markdown, no fences) with these keys:
-{
-  "name": "short project name (use provided name if given, otherwise derive from idea)",
-  "about": "2-3 sentence summary of what this is and why it matters",
-  "assumptions": ["3-5 key assumptions as short strings"],
-  "risks": ["3-5 key risks as short strings"],
-  "velocity": <estimated sprint velocity as integer based on team size>,
-  "suggestedEpics": [{"title": "...", "description": "..."}]
-}`;
-
-    const result = await askClaude([{ role: "user", content: prompt }],
-      "Return only valid JSON. No markdown fences. No explanation.");
+    const prompt = "Create a project overview.\nIdea: " + answers.idea + "\nPlatform: " + answers.platform + "\nType: " + answers.type + "\nIndustry: " + answers.industry + "\nTeam: " + answers.teamSize + "\nConstraints: " + answers.constraints + "\nName hint: " + projectName + "\n\nReturn JSON only (no fences):\n{\"name\":\"...\",\"about\":\"2-3 sentences\",\"assumptions\":[\"...\"],\"risks\":[\"...\"],\"velocity\":30,\"suggestedEpics\":[{\"title\":\"...\",\"description\":\"...\"}]}";
+    const result = await askClaude([{ role: "user", content: prompt }], "Return only valid JSON. No markdown.");
     setGenerating(false);
     try {
-      const clean = result.replace(/```json?/g, "").replace(/```/g, "").trim();
-      const data = JSON.parse(clean);
+      const data = JSON.parse(result.replace(/```json?|```/g, "").trim());
       const epics = (data.suggestedEpics || []).map(e => ({ ...e, id: uid(), stories: 0 }));
-      onCreate({
-        id: uid(),
-        name: data.name || projectName || "New Project",
-        about: data.about || answers.idea,
-        platform: answers.platform.split(" ")[0],
-        type: answers.type.split(" ")[0],
-        industry: answers.industry,
-        teamSize: parseInt(answers.teamSize) || 5,
-        velocity: data.velocity || 30,
-        assumptions: data.assumptions || [],
-        risks: data.risks || [],
-        stakeholders: [], personas: [],
-        epics, stories: [], bugs: [], design: [], team: [], sprints: [], vacations: [], aiRules: [],
-      });
+      onCreate({ id: uid(), mode: "delivery", name: data.name || projectName || "New Project", about: data.about || answers.idea, platform: answers.platform.split(" ")[0], type: answers.type.split(" ")[0], industry: answers.industry, teamSize: parseInt(answers.teamSize) || 5, velocity: data.velocity || 30, designVelocity: 20, assumptions: data.assumptions || [], risks: data.risks || [], stakeholders: [], personas: [], epics, stories: [], bugs: [], design: [], team: [], sprints: [], vacations: [], customHolidays: [], jira: null, syncUrl: "", aiRules: [] });
     } catch {
-      onCreate({
-        id: uid(), name: projectName || "New Project",
-        about: answers.idea,
-        platform: answers.platform.split(" ")[0], type: answers.type.split(" ")[0],
-        industry: answers.industry, teamSize: parseInt(answers.teamSize) || 5, velocity: 30,
-        assumptions: [], risks: [],
-        stakeholders: [], personas: [], epics: [], stories: [], bugs: [], design: [], team: [], sprints: [], vacations: [], aiRules: [],
-      });
+      onCreate({ id: uid(), mode: "delivery", name: projectName || "New Project", about: answers.idea, platform: answers.platform.split(" ")[0], type: answers.type.split(" ")[0], industry: answers.industry, teamSize: 5, velocity: 30, designVelocity: 20, assumptions: [], risks: [], stakeholders: [], personas: [], epics: [], stories: [], bugs: [], design: [], team: [], sprints: [], vacations: [], customHolidays: [], jira: null, syncUrl: "", aiRules: [] });
     }
   };
 
   return (
-    <Modal title="New Project" onClose={!generating ? onClose : undefined}
-      footer={
-        generating ? null :
+    <Modal title="New Delivery Project" onClose={!generating ? onClose : undefined}
+      footer={generating ? null :
+        <div style={{ display: "flex", gap: 8, width: "100%", justifyContent: "space-between" }}>
+          <button className="btn btn-ghost" onClick={prev}>{step === 0 ? "← Back" : "← Prev"}</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+            <button className="btn btn-primary" onClick={next} disabled={!val.trim()}>{isLast ? "Generate Project →" : "Next →"}</button>
+          </div>
+        </div>}>
+      {!generating ? (
         <>
-          <button className="btn btn-ghost" onClick={step === 0 ? onClose : prev}>
-            {step === 0 ? "Cancel" : "← Back"}
-          </button>
-          <button className="btn btn-primary" onClick={next} disabled={!val.trim() || generating}>
-            {isLast
-              ? <><Sparkles size={13} /> Create Project</>
-              : "Next →"}
-          </button>
-        </>
-      }>
-
-      {/* ── Loading overlay ── */}
-      {generating && (
-        <div style={{ padding: "48px 24px", textAlign: "center" }}>
-          <div style={{ marginBottom: 24 }}>
-            <div style={{ width: 52, height: 52, background: "rgba(232,197,71,.1)", border: "1px solid rgba(232,197,71,.25)", borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 20px" }}>
-              <Sparkles size={22} color="#e8c547" />
-            </div>
-            <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 17, color: "#eef0f7", marginBottom: 8 }}>Building your project...</div>
-            <div style={{ fontSize: 13, color: "#5d6a85", lineHeight: 1.65, maxWidth: 340, margin: "0 auto" }}>
-              Generating overview, assumptions, risks, and initial epics based on what you described.
-            </div>
+          <div className="step-dots" style={{ marginBottom: 20 }}>
+            {questions.map((_, i) => <div key={i} className={"step-dot" + (i <= step ? " on" : "")} />)}
           </div>
-          <div style={{ display: "flex", gap: 6, justifyContent: "center", marginTop: 28 }}>
-            <div className="ai-dot" style={{ width: 8, height: 8 }} />
-            <div className="ai-dot" style={{ width: 8, height: 8, animationDelay: ".2s" }} />
-            <div className="ai-dot" style={{ width: 8, height: 8, animationDelay: ".4s" }} />
-          </div>
-          <div style={{ marginTop: 28, display: "flex", flexDirection: "column", gap: 6, maxWidth: 300, margin: "28px auto 0" }}>
-            {[
-              ["✓", "Idea captured"],
-              ["✓", `Platform: ${answers.platform}`],
-              ["✓", `Industry: ${answers.industry}`],
-              ["~", "Generating structure..."],
-            ].map(([icon, label]) => (
-              <div key={label} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: icon === "~" ? "#e8c547" : "#3be8a8" }}>
-                <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11 }}>{icon}</span>
-                <span style={{ color: icon === "~" ? "#e8c547" : "#4a5568" }}>{label}</span>
+          <div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 6 }}>{cur.label}</div>
+          <div style={{ fontSize: 17, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne',sans-serif", marginBottom: cur.sub ? 6 : 14 }}>{cur.q}</div>
+          {cur.sub && <div style={{ fontSize: 13, color: "#6b778c", marginBottom: 14, lineHeight: 1.6 }}>{cur.sub}</div>}
+          {cur.options ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {cur.options.map(opt => (
+                <button key={opt} onClick={() => setAnswers(a => ({ ...a, [cur.key]: opt }))}
+                  style={{ textAlign: "left", padding: "10px 14px", border: "2px solid " + (val === opt ? "#0052cc" : "#dfe1e6"), borderRadius: 8, background: val === opt ? "#e8f0fe" : "#ffffff", cursor: "pointer", fontSize: 13, color: val === opt ? "#0052cc" : "#344563", fontFamily: "'DM Sans',sans-serif", fontWeight: val === opt ? 600 : 400 }}>
+                  {opt}
+                </button>
+              ))}
+            </div>
+          ) : (
+            <>
+              <div className="field" style={{ marginBottom: 10 }}>
+                <label>Project Name (optional)</label>
+                <input value={projectName} onChange={e => setProjectName(e.target.value)} placeholder="AI will suggest one if left blank" />
               </div>
-            ))}
+              {cur.multiline
+                ? <textarea value={val} onChange={e => setAnswers(a => ({ ...a, [cur.key]: e.target.value }))} placeholder={cur.placeholder} rows={5} autoFocus />
+                : <input value={val} onChange={e => setAnswers(a => ({ ...a, [cur.key]: e.target.value }))} placeholder={cur.placeholder} autoFocus onKeyDown={e => e.key === "Enter" && next()} />}
+            </>
+          )}
+          {step > 0 && (
+            <div style={{ marginTop: 20, padding: "10px 14px", background: "#f8f9fa", borderRadius: 8, border: "1px solid #ebecf0" }}>
+              {questions.slice(0, step).map((q, i) => (
+                <div key={i} style={{ display: "flex", gap: 8, fontSize: 11, marginBottom: 3 }}>
+                  <span style={{ color: "#36b37e" }}>✓</span>
+                  <span style={{ color: "#b3bac5" }}>{q.label}:</span>
+                  <span style={{ color: "#6b778c", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{answers[q.key]}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <div style={{ textAlign: "center", padding: "40px 24px" }}>
+          <div style={{ display: "inline-flex", gap: 6, marginBottom: 16 }}><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div>
+          <div style={{ fontSize: 14, color: "#344563", fontWeight: 500 }}>Generating your project...</div>
+          <div style={{ fontSize: 12, color: "#97a0af", marginTop: 6 }}>Creating epics, assumptions, risks, and velocity estimate</div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+function DiscoveryProjectModal({ onClose, onCreate, onBack }) {
+  const [step, setStep] = useState(0);
+  const [answers, setAnswers] = useState({ name: "", client: "", clientType: "startup", industry: "", platform: "", about: "", users: "", constraints: "", knownRisks: "", existingResearch: "" });
+  const [generating, setGenerating] = useState(false);
+
+  const questions = [
+    { key: "name", label: "Project Name", q: "What do we call this discovery?", sub: "The client or project name — doesn't need to be final.", placeholder: "e.g. Lacoste E-commerce Rethink, HealthTrack MVP Discovery..." },
+    { key: "clientType", label: "Client Type", q: "What kind of client is this?", sub: "Shapes the tone of meetings, documentation, and estimation.", options: ["startup", "scaleup", "enterprise"] },
+    { key: "industry", label: "Industry", q: "What industry or domain?", sub: "Helps scope assumptions, terminology, and compliance considerations.", placeholder: "e.g. Retail, FinTech, Healthcare, Logistics, EdTech..." },
+    { key: "platform", label: "Platform", q: "Where will the product live?", sub: null, options: ["Web", "Mobile", "Both", "Unknown — to be discovered"] },
+    { key: "about", label: "Context", q: "What do we know so far?", sub: "Describe the problem, opportunity, or business goal. Everything helps — rough is fine.", placeholder: "e.g. Lacoste wants to understand why their mobile checkout has a 60% drop-off. They suspect onboarding is the issue but don't have data to confirm...", multiline: true },
+    { key: "users", label: "Users", q: "Who are the end users?", sub: "Who will use this product? What do we know about them?", placeholder: "e.g. Internal finance team (mid-level analysts), customers aged 25-45 who shop online 2-3x per month..." },
+    { key: "constraints", label: "Constraints", q: "Any known constraints?", sub: "Budget, timelines, tech restrictions, compliance, existing systems...", placeholder: "e.g. Must integrate with SAP, GDPR compliance, 3-month discovery budget, team limited to 6 people..." },
+    { key: "existingResearch", label: "Existing Research", q: "What already exists?", sub: "Previous research, documentation, data, or decisions already made. Paste or summarize anything useful.", placeholder: "e.g. We have a 2023 customer survey, 3 stakeholder interviews recorded, and a legacy system architecture diagram...", multiline: true },
+  ];
+
+  const cur = questions[step];
+  const val = answers[cur.key];
+  const isLast = step === questions.length - 1;
+  const next = () => { if (!val?.trim()) return; if (!isLast) setStep(s => s + 1); else generate(); };
+  const prev = () => step === 0 ? onBack() : setStep(s => s - 1);
+
+  const generate = async () => {
+    setGenerating(true);
+    const prompt = "Generate a discovery project setup.\n\nProject: " + answers.name + "\nClient type: " + answers.clientType + "\nIndustry: " + answers.industry + "\nPlatform: " + answers.platform + "\nContext: " + answers.about + "\nUsers: " + answers.users + "\nConstraints: " + answers.constraints + "\nExisting research: " + answers.existingResearch + "\n\nReturn JSON only (no fences):\n{\"about\":\"3-4 sentence project summary\",\"assumptions\":[\"5-7 discovery assumptions as strings\"],\"risks\":[{\"text\":\"risk\",\"source\":\"initial\"}],\"opportunities\":[{\"text\":\"opportunity\",\"source\":\"initial\"}],\"suggestedAgenda\":\"A short kick-off meeting agenda for the first discovery session\"}";
+    const result = await askClaude([{ role: "user", content: prompt }], "Senior PM facilitator. Discovery project setup. Return only valid JSON.");
+    setGenerating(false);
+    const parsed = parseJSON(result) || {};
+    onCreate({
+      id: uid(), mode: "discovery",
+      name: answers.name || "Discovery Project",
+      about: parsed.about || answers.about,
+      clientType: answers.clientType,
+      industry: answers.industry,
+      platform: answers.platform.split(" ")[0],
+      type: "Discovery",
+      teamSize: 0, velocity: 0, designVelocity: 0,
+      assumptions: parsed.assumptions || [],
+      risks: parsed.risks || [],
+      opportunities: parsed.opportunities || [],
+      discoveryPhase: "discovery",
+      sessions: [],
+      savedAgenda: parsed.suggestedAgenda || "",
+      backbone: [], storyMap: [],
+      flows: [], personas: [],
+      architectureNotes: "", nfrs: [], adrs: [], integrations: [], spikes: [],
+      designResearchPlan: "", designPriorities: [], designNextSteps: [],
+      scenarios: null, presentationNotes: "",
+      stakeholders: [], epics: [], stories: [], bugs: [], design: [],
+      team: [], sprints: [], vacations: [], customHolidays: [],
+      jira: null, syncUrl: "", aiRules: [],
+    });
+  };
+
+  return (
+    <Modal title="New Discovery Project" onClose={!generating ? onClose : undefined}
+      footer={generating ? null :
+        <div style={{ display: "flex", gap: 8, width: "100%", justifyContent: "space-between" }}>
+          <button className="btn btn-ghost" onClick={prev}>{step === 0 ? "← Back" : "← Prev"}</button>
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+            <button className="btn btn-primary" onClick={next} disabled={!val?.trim()}>{isLast ? "Start Discovery →" : "Next →"}</button>
+          </div>
+        </div>}>
+      {!generating ? (
+        <>
+          <div className="step-dots" style={{ marginBottom: 20 }}>
+            {questions.map((_, i) => <div key={i} className={"step-dot" + (i <= step ? " on" : "")} />)}
+          </div>
+          <div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 6 }}>{cur.label}</div>
+          <div style={{ fontSize: 17, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne',sans-serif", marginBottom: cur.sub ? 6 : 14 }}>{cur.q}</div>
+          {cur.sub && <div style={{ fontSize: 13, color: "#6b778c", marginBottom: 14, lineHeight: 1.6 }}>{cur.sub}</div>}
+          {cur.options ? (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+              {cur.options.map(opt => (
+                <button key={opt} onClick={() => setAnswers(a => ({ ...a, [cur.key]: opt }))}
+                  style={{ textAlign: "left", padding: "10px 14px", border: "2px solid " + (val === opt ? "#7a6000" : "#dfe1e6"), borderRadius: 8, background: val === opt ? "#fff8e1" : "#ffffff", cursor: "pointer", fontSize: 13, color: val === opt ? "#7a6000" : "#344563", fontFamily: "'DM Sans',sans-serif", fontWeight: val === opt ? 600 : 400 }}>
+                  {opt}
+                </button>
+              ))}
+            </div>
+          ) : (
+            cur.multiline
+              ? <textarea value={val} onChange={e => setAnswers(a => ({ ...a, [cur.key]: e.target.value }))} placeholder={cur.placeholder} rows={5} autoFocus />
+              : <input value={val} onChange={e => setAnswers(a => ({ ...a, [cur.key]: e.target.value }))} placeholder={cur.placeholder} autoFocus onKeyDown={e => e.key === "Enter" && next()} />
+          )}
+          {step > 0 && (
+            <div style={{ marginTop: 20, padding: "10px 14px", background: "#fff8e1", borderRadius: 8, border: "1px solid #ffe999" }}>
+              {questions.slice(0, step).filter(q => answers[q.key]).map((q, i) => (
+                <div key={i} style={{ display: "flex", gap: 8, fontSize: 11, marginBottom: 3 }}>
+                  <span style={{ color: "#36b37e" }}>✓</span>
+                  <span style={{ color: "#b3bac5" }}>{q.label}:</span>
+                  <span style={{ color: "#6b778c", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{answers[q.key]}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      ) : (
+        <div style={{ textAlign: "center", padding: "40px 24px" }}>
+          <Compass size={32} color="#e8c547" style={{ marginBottom: 16 }} />
+          <div style={{ fontSize: 14, color: "#344563", fontWeight: 500 }}>Setting up your discovery project...</div>
+          <div style={{ fontSize: 12, color: "#97a0af", marginTop: 6 }}>Preparing initial assumptions, risks, and a kickoff agenda</div>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
+
+// ─── Discovery Data Helpers ──────────────────────────────────────────────────
+const DISCOVERY_TEMPLATE = {
+  mode: "discovery",
+  clientType: "startup",
+  sessions: [],
+  backbone: [],
+  storyMap: [],
+  assumptions: [],
+  risks: [],
+  opportunities: [],
+  personas: [],
+  flows: [],
+  architectureNotes: "",
+  nfrs: [],
+  adrs: [],
+  integrations: [],
+  designResearchPlan: "",
+  designPriorities: [],
+  scenarios: null,
+  presentationNotes: "",
+  discoveryPhase: "discovery",
+};
+
+const MOSCOW_COLORS = {
+  Must: { bg: "#ffebe6", color: "#bf2600", border: "#ffd5cc" },
+  Should: { bg: "#fff8e1", color: "#7a5c00", border: "#ffe999" },
+  Could: { bg: "#e3fcef", color: "#00632b", border: "#abf5d1" },
+  Won_t: { bg: "#f1f2f4", color: "#6b778c", border: "#dfe1e6" },
+};
+
+// ─── Shared Discovery Utilities ───────────────────────────────────────────────
+function CopyBox({ label, content }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => { navigator.clipboard.writeText(content).then(() => { setCopied(true); setTimeout(() => setCopied(false), 2000); }); };
+  return (
+    <div style={{ marginBottom: 12 }}>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+        <span style={{ fontSize: 11, color: "#6b778c", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", fontWeight: 600 }}>{label}</span>
+        <button className="btn btn-ghost btn-xs" onClick={copy}><Copy size={11} /> {copied ? "Copied!" : "Copy"}</button>
+      </div>
+      <pre style={{ background: "#f8f9fa", border: "1px solid #ebecf0", borderRadius: 6, padding: "10px 12px", fontSize: 12, color: "#344563", whiteSpace: "pre-wrap", fontFamily: "'DM Sans',sans-serif", lineHeight: 1.65 }}>{content}</pre>
+    </div>
+  );
+}
+
+function PhaseTag({ phase }) {
+  const map = { discovery: { label: "Discovery", color: "#0052cc", bg: "#e6f0ff" }, "story-mapping": { label: "Story Mapping", color: "#5b21b6", bg: "#f3e6ff" }, planning: { label: "Planning", color: "#7a5c00", bg: "#fff8e1" }, complete: { label: "Complete", color: "#00632b", bg: "#e3fcef" } };
+  const t = map[phase] || map.discovery;
+  return <span style={{ fontSize: 11, fontWeight: 600, color: t.color, background: t.bg, padding: "2px 8px", borderRadius: 4, fontFamily: "'DM Mono',monospace" }}>{t.label}</span>;
+}
+
+// ─── Discovery Overview ───────────────────────────────────────────────────────
+function DiscoveryOverview({ project, update, setSection }) {
+  const phases = ["discovery", "story-mapping", "planning", "complete"];
+  const phaseLabels = { discovery: "Discovery", "story-mapping": "Story Mapping", planning: "Planning", complete: "Complete" };
+  const cur = phases.indexOf(project.discoveryPhase || "discovery");
+
+  return (
+    <div>
+      <div className="sec-head">
+        <div>
+          <div className="sec-title">{project.name}</div>
+          <div className="sec-sub">{project.clientType === "startup" ? "Startup" : "Enterprise"} · Discovery Project · {project.industry}</div>
+        </div>
+        <div className="sec-actions">
+          <PhaseTag phase={project.discoveryPhase || "discovery"} />
+          <span className="tag tag-muted">{project.clientType}</span>
+        </div>
+      </div>
+
+      {/* Phase progress */}
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 12, fontWeight: 600, color: "#344563", marginBottom: 14 }}>Discovery Progress</div>
+        <div style={{ display: "flex", gap: 0 }}>
+          {phases.map((p, i) => (
+            <div key={p} style={{ flex: 1, position: "relative" }}>
+              <div style={{ display: "flex", alignItems: "center" }}>
+                <div onClick={() => update({ discoveryPhase: p })} style={{ width: 28, height: 28, borderRadius: "50%", background: i <= cur ? "#e8c547" : "#ebecf0", border: i === cur ? "3px solid #c9a800" : "2px solid " + (i < cur ? "#e8c547" : "#dfe1e6"), display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, zIndex: 1 }}>
+                  {i < cur ? <Check size={12} color="#3d2e00" /> : <span style={{ fontSize: 11, fontWeight: 700, color: i === cur ? "#3d2e00" : "#97a0af" }}>{i + 1}</span>}
+                </div>
+                {i < phases.length - 1 && <div style={{ flex: 1, height: 2, background: i < cur ? "#e8c547" : "#ebecf0" }} />}
+              </div>
+              <div style={{ fontSize: 10, color: i <= cur ? "#344563" : "#97a0af", marginTop: 6, fontWeight: i === cur ? 600 : 400 }}>{phaseLabels[p]}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="two-col" style={{ marginBottom: 16 }}>
+        <div className="card">
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne',sans-serif", marginBottom: 12 }}>About</div>
+          <p style={{ fontSize: 13, color: "#505f79", lineHeight: 1.65 }}>{project.about}</p>
+          {project.assumptions?.length > 0 && (
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 10, color: "#6b778c", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 6 }}>Key Assumptions</div>
+              <div className="chips">{project.assumptions.slice(0, 4).map((a, i) => <span key={i} className="chip">{a}</span>)}</div>
+            </div>
+          )}
+        </div>
+        <div className="card">
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne',sans-serif", marginBottom: 12 }}>Discovery Status</div>
+          {[
+            { label: "Sessions logged", value: (project.sessions || []).length, color: "#0052cc", ok: (project.sessions || []).length > 0 },
+            { label: "Story map stages", value: (project.backbone || []).length, color: "#5b21b6", ok: (project.backbone || []).length > 0 },
+            { label: "Risks identified", value: (project.risks || []).length, color: "#de350b", ok: (project.risks || []).length > 0 },
+            { label: "Opportunities", value: (project.opportunities || []).length, color: "#00875a", ok: (project.opportunities || []).length > 0 },
+          ].map(({ label, value, color, ok }) => (
+            <div key={label} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 0", borderBottom: "1px solid #ebecf0" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ width: 6, height: 6, borderRadius: "50%", background: ok ? color : "#ebecf0" }} />
+                <span style={{ fontSize: 13, color: "#505f79" }}>{label}</span>
+              </div>
+              <span style={{ fontSize: 13, fontWeight: 600, color: ok ? color : "#97a0af" }}>{value}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="card">
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne',sans-serif", marginBottom: 12 }}>Quick Navigation</div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10 }}>
+          {[
+            { id: "d-meetings", label: "Meeting Prep", desc: "Generate agenda & prepare questions", Icon: ClipboardList },
+            { id: "d-sessions", label: "Sessions", desc: "Log notes, extract insights with AI", Icon: FileText },
+            { id: "d-storymap", label: "Story Mapping", desc: "Backbone → Epics → Features", Icon: Map },
+            { id: "d-planning", label: "Tech Planning", desc: "Architecture, NFRs, ADRs", Icon: Cpu },
+            { id: "d-design", label: "Design Planning", desc: "Research plan & priorities", Icon: Palette },
+            { id: "d-team", label: "Team & Estimation", desc: "3 team scenarios with costs", Icon: BarChart2 },
+            { id: "d-presentation", label: "Client Presentation", desc: "Export full document", Icon: Presentation },
+          ].map(({ id, label, desc, Icon }) => (
+            <button key={id} onClick={() => setSection(id)} style={{ textAlign: "left", padding: "12px", background: "#f8f9fa", border: "1px solid #dfe1e6", borderRadius: 8, cursor: "pointer", transition: "all .12s", fontFamily: "'DM Sans',sans-serif" }}
+              onMouseEnter={e => { e.currentTarget.style.background = "#f0f1f3"; e.currentTarget.style.borderColor = "#b3bac5"; }}
+              onMouseLeave={e => { e.currentTarget.style.background = "#f8f9fa"; e.currentTarget.style.borderColor = "#dfe1e6"; }}>
+              <Icon size={16} color="#6b778c" style={{ marginBottom: 6 }} />
+              <div style={{ fontSize: 12, fontWeight: 600, color: "#172b4d", marginBottom: 2 }}>{label}</div>
+              <div style={{ fontSize: 11, color: "#97a0af" }}>{desc}</div>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Discovery Meeting Prep ────────────────────────────────────────────────────
+function DiscoveryMeetingPrep({ project, update }) {
+  const [loading, setLoading] = useState(false);
+  const [agenda, setAgenda] = useState(project.savedAgenda || null);
+  const [phase, setPhase] = useState("pre-discovery");
+  const [clientType, setClientType] = useState(project.clientType || "startup");
+  const [extra, setExtra] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const generateAgenda = async () => {
+    setLoading(true);
+    const reply = await askClaude([{
+      role: "user", content:
+        `Create a discovery meeting agenda for:\nProject: ${project.name}\nAbout: ${project.about}\nIndustry: ${project.industry}\nClient type: ${clientType}\nPhase: ${phase}\nExtra context: ${extra || "none"}\n\nGenerate a structured agenda with:\n1. Meeting objective (1 sentence)\n2. Participants suggested (with roles)\n3. Time blocks (e.g. 0:00–0:15 Welcome...)\n4. Key topics to cover (5-8 specific to this project and phase)\n5. Pre-work to send to client (2-4 items)\n6. Key questions to ask (6-10 specific, not generic)\n7. Expected outputs from this session\n\nBe SPECIFIC to this project. For a ${clientType}, the tone and depth should differ. Format it clearly with sections and time estimates. Total meeting: 90 minutes.`
+    }],
+      "You are a senior product discovery facilitator. Create practical, specific agendas — not generic templates. Reference the project context throughout.", 2000);
+    setAgenda(reply);
+    update({ savedAgenda: reply });
+    setLoading(false);
+  };
+
+  const phases = [
+    { id: "pre-discovery", label: "Pre-Discovery Kickoff" },
+    { id: "user-research", label: "User Research Session" },
+    { id: "technical", label: "Technical Discovery" },
+    { id: "stakeholder", label: "Stakeholder Alignment" },
+    { id: "synthesis", label: "Synthesis & Wrap-Up" },
+  ];
+
+  return (
+    <div>
+      <div className="sec-head">
+        <div><div className="sec-title">Meeting Prep</div><div className="sec-sub">AI-generated agendas and preparation materials for each discovery session</div></div>
+      </div>
+
+      <div className="card" style={{ marginBottom: 20 }}>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne',sans-serif", marginBottom: 14 }}>Generate Meeting Agenda</div>
+        <div className="row">
+          <div className="field">
+            <label>Meeting Type</label>
+            <select value={phase} onChange={e => setPhase(e.target.value)}>
+              {phases.map(p => <option key={p.id} value={p.id}>{p.label}</option>)}
+            </select>
+          </div>
+          <div className="field">
+            <label>Client Type</label>
+            <select value={clientType} onChange={e => setClientType(e.target.value)}>
+              <option value="startup">Startup</option>
+              <option value="enterprise">Enterprise</option>
+              <option value="scaleup">Scale-up</option>
+            </select>
           </div>
         </div>
-      )}
-
-      {/* ── Step content ── */}
-      {!generating && (<>
-      {/* Progress dots */}
-      <div className="step-dots">
-        {questions.map((_, i) => <div key={i} className={`step-dot${i <= step ? " on" : ""}`} />)}
+        <div className="field">
+          <label>Additional Context</label>
+          <textarea value={extra} onChange={e => setExtra(e.target.value)} placeholder="e.g. This is a 3rd meeting, we already have user journeys mapped. Focus on technical constraints and integration points..." rows={2} />
+        </div>
+        <button className="btn btn-primary" onClick={generateAgenda} disabled={loading} style={{ width: "100%" }}>
+          {loading ? <><div className="ai-dot" /><div className="ai-dot" style={{ animationDelay: ".2s" }} /><div className="ai-dot" style={{ animationDelay: ".4s" }} /> Generating agenda...</> : <><Sparkles size={13} /> Generate Agenda</>}
+        </button>
       </div>
 
-      {/* Step label */}
-      <div style={{ fontSize: 10, color: "#4a5568", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 6 }}>
-        Step {step + 1} of {questions.length} · {cur.label}
-      </div>
-
-      {/* Question */}
-      <p style={{ fontSize: 15, color: "#eef0f7", fontWeight: 600, marginBottom: cur.sub ? 6 : 14, fontFamily: "'Syne',sans-serif", letterSpacing: "-.01em" }}>
-        {cur.q}
-      </p>
-      {cur.sub && (
-        <p style={{ fontSize: 12, color: "#5d6a85", marginBottom: 16, lineHeight: 1.6 }}>{cur.sub}</p>
-      )}
-
-      {/* Input */}
-      {cur.options ? (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          {cur.options.map(o => {
-            const sel = val === o;
-            return (
-              <button key={o} onClick={() => setAnswers(a => ({ ...a, [cur.key]: o }))}
-                style={{ textAlign: "left", padding: "12px 14px", background: sel ? "rgba(232,197,71,.08)" : "#0d1018", border: `1px solid ${sel ? "rgba(232,197,71,.4)" : "#1e2533"}`, borderRadius: 8, cursor: "pointer", fontSize: 13, color: sel ? "#e8c547" : "#8090a8", fontFamily: "'DM Sans',sans-serif", transition: "all .15s", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                {o} {sel && <Check size={13} />}
+      {agenda && (
+        <div className="card">
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne',sans-serif" }}>
+              {phases.find(p => p.id === phase)?.label} — Agenda
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button className="btn btn-ghost btn-sm" onClick={() => { navigator.clipboard.writeText(agenda); setCopied(true); setTimeout(() => setCopied(false), 2000); }}>
+                <Copy size={12} /> {copied ? "Copied!" : "Copy for Confluence"}
               </button>
-            );
-          })}
-        </div>
-      ) : cur.multiline ? (
-        <textarea value={val} onChange={e => setAnswers(a => ({ ...a, [cur.key]: e.target.value }))}
-          placeholder={cur.placeholder} rows={6} autoFocus
-          style={{ fontSize: 13, lineHeight: 1.65 }} />
-      ) : (
-        <input value={val} onChange={e => setAnswers(a => ({ ...a, [cur.key]: e.target.value }))}
-          placeholder={cur.placeholder} onKeyDown={e => e.key === "Enter" && next()} autoFocus />
-      )}
-
-      {/* Project name on last step */}
-      {isLast && (
-        <div className="field" style={{ marginTop: 16 }}>
-          <label>Project Name <span style={{ color: "#3a4255", fontWeight: 400 }}>(optional — AI will suggest one)</span></label>
-          <input value={projectName} onChange={e => setProjectName(e.target.value)} placeholder="e.g. Nexus Platform, Atlas..." />
+              <button className="btn btn-ai btn-sm" onClick={generateAgenda}><Sparkles size={12} /> Regenerate</button>
+            </div>
+          </div>
+          <pre style={{ fontSize: 13, color: "#344563", whiteSpace: "pre-wrap", lineHeight: 1.8, fontFamily: "'DM Sans',sans-serif" }}>{agenda}</pre>
         </div>
       )}
 
-      {/* Summary of previous answers */}
-      {step > 0 && (
-        <div style={{ marginTop: 20, padding: "10px 14px", background: "#0d1018", borderRadius: 8, border: "1px solid #181f2d" }}>
-          {questions.slice(0, step).map((q, i) => (
-            <div key={i} style={{ display: "flex", gap: 8, fontSize: 11, marginBottom: 3, alignItems: "flex-start" }}>
-              <span style={{ color: "#3be8a8", fontFamily: "'DM Mono',monospace", flexShrink: 0 }}>✓</span>
-              <span style={{ color: "#3a4255", flexShrink: 0 }}>{q.label}:</span>
-              <span style={{ color: "#5d6a85", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: i === 0 ? "normal" : "nowrap", lineHeight: 1.4, maxHeight: i === 0 ? 36 : "none", WebkitLineClamp: i === 0 ? 2 : 1, display: i === 0 ? "-webkit-box" : "block", WebkitBoxOrient: "vertical" }}>
-                {answers[q.key]}
-              </span>
+      {!agenda && (
+        <div className="card" style={{ background: "#f8f9fa" }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#344563", marginBottom: 10 }}>What you'll get</div>
+          {["Meeting objective tailored to your project phase", "Suggested participants with roles", "90-minute time blocks with specific topics", "Pre-work checklist to send to the client", "6–10 specific questions based on your project context", "Expected outputs from the session"].map((item, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 6, fontSize: 13, color: "#505f79" }}>
+              <span style={{ color: "#36b37e", marginTop: 2, flexShrink: 0 }}>✓</span> {item}
             </div>
           ))}
         </div>
       )}
-      </>)}
-    </Modal>
+    </div>
+  );
+}
+
+// ─── Discovery Sessions ────────────────────────────────────────────────────────
+function DiscoverySessions({ project, update }) {
+  const [modal, setModal] = useState(null);
+  const [sessionForm, setSessionForm] = useState({ date: new Date().toISOString().split("T")[0], title: "", participants: "", notes: "" });
+  const [extracting, setExtracting] = useState(null);
+  const sessions = project.sessions || [];
+
+  const saveSession = () => {
+    if (!sessionForm.title.trim()) return;
+    const session = { ...sessionForm, id: uid(), outputs: null };
+    update({ sessions: [...sessions, session] });
+    setModal(null);
+    setSessionForm({ date: new Date().toISOString().split("T")[0], title: "", participants: "", notes: "" });
+  };
+
+  const extractOutputs = async (session) => {
+    setExtracting(session.id);
+    const reply = await askClaude([{ role: "user", content: `Extract structured outputs from these discovery session notes.\n\nSession: ${session.title}\nProject: ${project.name} (${project.industry})\nNotes:\n${session.notes}\n\nReturn JSON:\n{"personas":[{"role":"..","description":".."}],"flows":["flow1","flow2"],"risks":["risk1"],"opportunities":["opp1"],"assumptions":["assumption1"],"keyDecisions":["decision1"],"openQuestions":["question1"]}\n\nOnly include what's actually in the notes. Return valid JSON only.` }],
+      "Extract PM discovery outputs from meeting notes. Return only valid JSON.", 1500);
+    const parsed = parseJSON(reply);
+    if (parsed) {
+      const updated = sessions.map(s => s.id === session.id ? { ...s, outputs: parsed } : s);
+      update({
+        sessions: updated,
+        risks: [...(project.risks || []), ...(parsed.risks || []).map(r => ({ id: uid(), text: r, source: session.title }))],
+        opportunities: [...(project.opportunities || []), ...(parsed.opportunities || []).map(o => ({ id: uid(), text: o, source: session.title }))],
+        assumptions: [...(project.assumptions || []), ...(parsed.assumptions || [])],
+        flows: [...(project.flows || []), ...(parsed.flows || [])],
+      });
+    }
+    setExtracting(null);
+  };
+
+  const outputs = {
+    risks: project.risks || [],
+    opportunities: project.opportunities || [],
+    assumptions: project.assumptions || [],
+    flows: project.flows || [],
+  };
+
+  return (
+    <div>
+      <div className="sec-head">
+        <div><div className="sec-title">Sessions & Outputs</div><div className="sec-sub">Log meeting notes — AI extracts risks, opportunities, assumptions, and flows</div></div>
+        <button className="btn btn-primary" onClick={() => setModal("new")}><Plus size={13} /> Log Session</button>
+      </div>
+
+      <div className="two-col" style={{ marginBottom: 20 }}>
+        {[
+          { label: "Risks", items: outputs.risks, color: "#de350b", bg: "#ffebe6" },
+          { label: "Opportunities", items: outputs.opportunities, color: "#00632b", bg: "#e3fcef" },
+          { label: "Assumptions", items: outputs.assumptions, color: "#7a5c00", bg: "#fff8e1" },
+          { label: "Flows Mapped", items: outputs.flows, color: "#0052cc", bg: "#e6f0ff" },
+        ].map(({ label, items, color, bg }) => (
+          <div key={label} className="card" style={{ padding: "14px 16px" }}>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color, fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em" }}>{label}</span>
+              <span style={{ fontSize: 12, fontWeight: 700, color, background: bg, padding: "1px 8px", borderRadius: 4 }}>{items.length}</span>
+            </div>
+            {items.slice(0, 3).map((item, i) => (
+              <div key={i} style={{ fontSize: 12, color: "#505f79", padding: "4px 0", borderBottom: "1px solid #f1f2f4", lineHeight: 1.4 }}>
+                {typeof item === "string" ? item : item.text}
+              </div>
+            ))}
+            {items.length > 3 && <div style={{ fontSize: 11, color: "#97a0af", marginTop: 4 }}>+{items.length - 3} more</div>}
+          </div>
+        ))}
+      </div>
+
+      {sessions.length === 0 ? (
+        <Empty icon={<FileText size={36} />} title="No sessions logged yet" sub="Log your first discovery session and let AI extract the key insights"
+          action={<button className="btn btn-primary" onClick={() => setModal("new")}><Plus size={13} /> Log Session</button>} />
+      ) : (
+        sessions.map(s => (
+          <div key={s.id} className="card">
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 10 }}>
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 14, color: "#172b4d" }}>{s.title}</div>
+                <div style={{ fontSize: 12, color: "#97a0af", marginTop: 2 }}>{s.date} · {s.participants}</div>
+              </div>
+              <div style={{ display: "flex", gap: 8 }}>
+                {!s.outputs && s.notes && (
+                  <button className="btn btn-ai btn-sm" onClick={() => extractOutputs(s)} disabled={extracting === s.id}>
+                    {extracting === s.id ? "Extracting..." : <><Sparkles size={12} /> Extract Outputs</>}
+                  </button>
+                )}
+                {s.outputs && <span style={{ fontSize: 11, color: "#36b37e", fontWeight: 600, display: "flex", alignItems: "center", gap: 4 }}><Check size={12} /> Outputs extracted</span>}
+              </div>
+            </div>
+            {s.notes && <p style={{ fontSize: 12, color: "#6b778c", lineHeight: 1.6, marginBottom: s.outputs ? 10 : 0 }}>{s.notes.slice(0, 200)}{s.notes.length > 200 ? "..." : ""}</p>}
+            {s.outputs && (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                {["risks", "opportunities", "assumptions", "keyDecisions", "openQuestions"].map(k => s.outputs[k]?.length > 0 && (
+                  <span key={k} className="chip">{s.outputs[k].length} {k}</span>
+                ))}
+              </div>
+            )}
+          </div>
+        ))
+      )}
+
+      {modal === "new" && (
+        <Modal wide title="Log Discovery Session" onClose={() => setModal(null)}
+          footer={<><button className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button><button className="btn btn-primary" onClick={saveSession}>Save Session</button></>}>
+          <div className="row">
+            <div className="field"><label>Session Title</label><input value={sessionForm.title} onChange={e => setSessionForm(f => ({ ...f, title: e.target.value }))} placeholder="e.g. Stakeholder Kickoff, User Research Round 1..." autoFocus /></div>
+            <div className="field"><label>Date</label><input type="date" value={sessionForm.date} onChange={e => setSessionForm(f => ({ ...f, date: e.target.value }))} /></div>
+          </div>
+          <div className="field"><label>Participants</label><input value={sessionForm.participants} onChange={e => setSessionForm(f => ({ ...f, participants: e.target.value }))} placeholder="e.g. PM, Design Lead, CTO, 2 users" /></div>
+          <div className="field"><label>Session Notes</label><textarea value={sessionForm.notes} onChange={e => setSessionForm(f => ({ ...f, notes: e.target.value }))} placeholder="Paste your raw meeting notes here — the more detail, the better the AI extraction..." rows={8} /></div>
+        </Modal>
+      )}
+    </div>
+  );
+}
+
+// ─── Story Mapping ─────────────────────────────────────────────────────────────
+function StoryMappingSection({ project, update }) {
+  const [generating, setGenerating] = useState(false);
+  const [editingStage, setEditingStage] = useState(null);
+  const backbone = project.backbone || [];
+  const storyMap = project.storyMap || [];
+
+  const generateBackbone = async () => {
+    setGenerating(true);
+    const reply = await askClaude([{ role: "user", content: `Create a user story map backbone for:\nProject: ${project.name}\nAbout: ${project.about}\nIndustry: ${project.industry}\nPersonas: ${(project.personas || []).map(p => p.role).join(", ") || "not defined yet"}\nFlows: ${(project.flows || []).join(", ") || "not defined yet"}\n\nReturn JSON:\n{"backbone":[{"id":"b1","stage":"Stage Name","description":"What the user is doing at this stage","epics":[{"id":"e1","title":"Epic title","moscow":"Must","features":[{"id":"f1","title":"Feature","moscow":"Must","slice":"mvp"}]}]}]}\n\nCreate 4-7 backbone stages covering the full user journey. Under each, 2-4 epics. Under each epic, 2-4 features. Assign MoSCoW (Must/Should/Could/Won_t). Mark slice as 'mvp' or 'future'. Return only valid JSON starting with {.` }],
+      "You are a senior PM expert in story mapping. Return only valid JSON.", 2500);
+    setGenerating(false);
+    const parsed = parseJSON(reply);
+    if (parsed?.backbone) {
+      update({ backbone: parsed.backbone, storyMap: parsed.backbone });
+    }
+  };
+
+  const addStage = () => {
+    const newStage = { id: uid(), stage: "New Stage", description: "", epics: [] };
+    update({ backbone: [...backbone, newStage], storyMap: [...backbone, newStage] });
+  };
+
+  const addEpic = (stageId) => {
+    const updated = backbone.map(s => s.id === stageId ? { ...s, epics: [...(s.epics || []), { id: uid(), title: "New Epic", moscow: "Should", features: [] }] } : s);
+    update({ backbone: updated, storyMap: updated });
+  };
+
+  const addFeature = (stageId, epicId) => {
+    const updated = backbone.map(s => s.id === stageId ? { ...s, epics: (s.epics || []).map(e => e.id === epicId ? { ...e, features: [...(e.features || []), { id: uid(), title: "New Feature", moscow: "Should", slice: "future" }] } : e) } : s);
+    update({ backbone: updated, storyMap: updated });
+  };
+
+  const updateFeature = (stageId, epicId, featId, changes) => {
+    const updated = backbone.map(s => s.id === stageId ? { ...s, epics: (s.epics || []).map(e => e.id === epicId ? { ...e, features: (e.features || []).map(f => f.id === featId ? { ...f, ...changes } : f) } : e) } : s);
+    update({ backbone: updated, storyMap: updated });
+  };
+
+  const MoscowBadge = ({ value, onChange }) => {
+    const opts = ["Must", "Should", "Could", "Won_t"];
+    const cur = MOSCOW_COLORS[value] || MOSCOW_COLORS.Should;
+    return (
+      <select value={value} onChange={e => onChange(e.target.value)}
+        style={{ fontSize: 10, padding: "1px 4px", borderRadius: 4, border: "1px solid " + cur.border, background: cur.bg, color: cur.color, fontFamily: "'DM Mono',monospace", fontWeight: 700, cursor: "pointer", outline: "none" }}>
+        {opts.map(o => <option key={o}>{o}</option>)}
+      </select>
+    );
+  };
+
+  const confluenceText = backbone.map(s =>
+    `h2. ${s.stage}\n${s.description}\n\n` +
+    (s.epics || []).map(e =>
+      `h3. ${e.title} [${e.moscow}]\n` +
+      (e.features || []).map(f => `* ${f.title} [${f.moscow}] — ${f.slice === "mvp" ? "✅ MVP" : "⏳ Future"}`).join("\n")
+    ).join("\n\n")
+  ).join("\n\n---\n\n");
+
+  return (
+    <div>
+      <div className="sec-head">
+        <div><div className="sec-title">Story Mapping</div><div className="sec-sub">Backbone → Epics → Features · MoSCoW prioritization · MVP slicing</div></div>
+        <div className="sec-actions">
+          {backbone.length > 0 && (
+            <button className="btn btn-ghost btn-sm" onClick={() => { navigator.clipboard.writeText(confluenceText); }}>
+              <Copy size={12} /> Copy to Confluence
+            </button>
+          )}
+          <button className="btn btn-ghost" onClick={addStage}><Plus size={13} /> Stage</button>
+          <button className="btn btn-ai" onClick={generateBackbone} disabled={generating}>
+            {generating ? "Generating..." : <><Sparkles size={13} /> AI Generate Map</>}
+          </button>
+        </div>
+      </div>
+
+      {generating && (
+        <div className="card" style={{ textAlign: "center", padding: "40px 24px" }}>
+          <div style={{ display: "inline-flex", gap: 6, marginBottom: 14 }}><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div>
+          <div style={{ fontSize: 13, color: "#6b778c" }}>Generating story map from your discovery insights...</div>
+        </div>
+      )}
+
+      {!generating && backbone.length === 0 && (
+        <Empty icon={<Map size={36} />} title="No story map yet"
+          sub="Let AI generate a backbone from your discovery sessions, or add stages manually"
+          action={<div style={{ display: "flex", gap: 8 }}><button className="btn btn-ghost" onClick={addStage}><Plus size={13} /> Add Stage</button><button className="btn btn-ai" onClick={generateBackbone}><Sparkles size={13} /> AI Generate</button></div>} />
+      )}
+
+      {backbone.length > 0 && (
+        <>
+          {/* MoSCoW legend + MVP line explanation */}
+          <div style={{ display: "flex", gap: 12, marginBottom: 16, alignItems: "center", flexWrap: "wrap" }}>
+            {Object.entries(MOSCOW_COLORS).map(([k, v]) => <span key={k} style={{ fontSize: 11, fontWeight: 600, color: v.color, background: v.bg, padding: "2px 8px", borderRadius: 4, fontFamily: "'DM Mono',monospace" }}>{k}</span>)}
+            <div style={{ marginLeft: "auto", fontSize: 12, color: "#6b778c" }}>✅ MVP &nbsp; ⏳ Future</div>
+          </div>
+
+          {/* Horizontal scroll story map */}
+          <div style={{ overflowX: "auto", paddingBottom: 12 }}>
+            <div style={{ display: "flex", gap: 14, minWidth: "max-content" }}>
+              {backbone.map(stage => (
+                <div key={stage.id} style={{ width: 240, flexShrink: 0 }}>
+                  {/* Backbone stage header */}
+                  <div style={{ background: "#172b4d", color: "#ffffff", borderRadius: "8px 8px 0 0", padding: "10px 12px", marginBottom: 2 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700 }}>{stage.stage}</div>
+                    <div style={{ fontSize: 10, color: "#b3bac5", marginTop: 2 }}>{stage.description}</div>
+                  </div>
+
+                  {/* Epics */}
+                  {(stage.epics || []).map(epic => (
+                    <div key={epic.id} style={{ marginBottom: 6 }}>
+                      <div style={{ background: "#f1f2f4", border: "1px solid #dfe1e6", padding: "6px 10px", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                        <span style={{ fontSize: 11, fontWeight: 600, color: "#344563" }}>{epic.title}</span>
+                        <MoscowBadge value={epic.moscow} onChange={m => {
+                          const up = backbone.map(s => s.id === stage.id ? { ...s, epics: s.epics.map(e => e.id === epic.id ? { ...e, moscow: m } : e) } : s);
+                          update({ backbone: up, storyMap: up });
+                        }} />
+                      </div>
+                      {/* Features */}
+                      {(epic.features || []).map(feat => {
+                        const isMvp = feat.slice === "mvp";
+                        return (
+                          <div key={feat.id} style={{ background: isMvp ? "#ffffff" : "#f8f9fa", border: "1px solid " + (isMvp ? MOSCOW_COLORS[feat.moscow]?.border || "#dfe1e6" : "#ebecf0"), borderTop: "none", padding: "5px 10px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 6 }}>
+                            <span style={{ fontSize: 11, color: "#505f79", flex: 1, lineHeight: 1.3 }}>{feat.title}</span>
+                            <div style={{ display: "flex", gap: 4, alignItems: "center", flexShrink: 0 }}>
+                              <button onClick={() => updateFeature(stage.id, epic.id, feat.id, { slice: isMvp ? "future" : "mvp" })}
+                                style={{ fontSize: 9, padding: "1px 5px", borderRadius: 3, border: "1px solid " + (isMvp ? "#36b37e" : "#dfe1e6"), background: isMvp ? "#e3fcef" : "#f1f2f4", color: isMvp ? "#00632b" : "#97a0af", cursor: "pointer", fontFamily: "'DM Mono',monospace" }}>
+                                {isMvp ? "MVP" : "FUT"}
+                              </button>
+                              <MoscowBadge value={feat.moscow} onChange={m => updateFeature(stage.id, epic.id, feat.id, { moscow: m })} />
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <button onClick={() => addFeature(stage.id, epic.id)}
+                        style={{ width: "100%", fontSize: 10, padding: "4px", background: "transparent", border: "1px dashed #dfe1e6", borderTop: "none", cursor: "pointer", color: "#97a0af", fontFamily: "'DM Sans',sans-serif" }}>
+                        + feature
+                      </button>
+                    </div>
+                  ))}
+                  <button onClick={() => addEpic(stage.id)}
+                    style={{ width: "100%", fontSize: 11, padding: "6px", background: "transparent", border: "1px dashed #dfe1e6", cursor: "pointer", color: "#97a0af", fontFamily: "'DM Sans',sans-serif", borderRadius: "0 0 6px 6px" }}>
+                    + epic
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* MVP summary */}
+          <div className="card" style={{ marginTop: 16 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne',sans-serif", marginBottom: 10 }}>MVP Summary</div>
+            <div className="two-col" style={{ gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 11, color: "#6b778c", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 6 }}>In MVP</div>
+                {backbone.flatMap(s => (s.epics || []).flatMap(e => (e.features || []).filter(f => f.slice === "mvp").map(f => ({ stage: s.stage, epic: e.title, feat: f })))).slice(0, 6).map((item, i) => (
+                  <div key={i} style={{ fontSize: 12, color: "#344563", padding: "3px 0", display: "flex", gap: 6, alignItems: "center" }}>
+                    <span style={{ fontSize: 9, fontWeight: 700, color: MOSCOW_COLORS[item.feat.moscow]?.color, background: MOSCOW_COLORS[item.feat.moscow]?.bg, padding: "1px 5px", borderRadius: 3 }}>{item.feat.moscow}</span>
+                    <span style={{ color: "#6b778c" }}>{item.stage} ·</span> {item.feat.title}
+                  </div>
+                ))}
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: "#6b778c", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 6 }}>Future Releases</div>
+                {backbone.flatMap(s => (s.epics || []).flatMap(e => (e.features || []).filter(f => f.slice === "future").map(f => ({ stage: s.stage, feat: f })))).slice(0, 6).map((item, i) => (
+                  <div key={i} style={{ fontSize: 12, color: "#97a0af", padding: "3px 0" }}>⏳ {item.feat.title}</div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Discovery Planning (Tech) ─────────────────────────────────────────────────
+function DiscoveryPlanning({ project, update }) {
+  const [generating, setGenerating] = useState(false);
+  const [section, setSection] = useState("architecture");
+
+  const generatePlanning = async () => {
+    setGenerating(true);
+    const mvpFeatures = (project.backbone || []).flatMap(s => (s.epics || []).flatMap(e => (e.features || []).filter(f => f.slice === "mvp").map(f => f.title)));
+    const reply = await askClaude([{ role: "user", content: `Generate technical planning for:\nProject: ${project.name}\nAbout: ${project.about}\nIndustry: ${project.industry}\nPlatform: ${project.platform}\nMVP features: ${mvpFeatures.slice(0, 10).join(", ") || "not defined"}\n\nReturn JSON:\n{"architectureNotes":"C4 L1 description of the system context and components","nfrs":[{"category":"Performance","requirement":"...","priority":"Must"},{"category":"Security","requirement":"...","priority":"Must"},{"category":"Availability","requirement":"...","priority":"Should"},{"category":"Compliance","requirement":"...","priority":"Could"}],"adrs":[{"title":"...","context":"...","decision":"...","consequences":"..."}],"integrations":[{"system":"...","direction":"in/out","auth":"...","notes":"..."}],"spikes":["question to investigate 1","question 2"]}\n\nReturn only valid JSON.` }],
+      "You are a technical architect. Generate practical technical planning. Return only valid JSON.", 2000);
+    setGenerating(false);
+    const parsed = parseJSON(reply);
+    if (parsed) {
+      update({
+        architectureNotes: parsed.architectureNotes || "",
+        nfrs: parsed.nfrs || [],
+        adrs: parsed.adrs || [],
+        integrations: parsed.integrations || [],
+        spikes: parsed.spikes || [],
+      });
+    }
+  };
+
+  const tabs = [
+    { id: "architecture", label: "Architecture" },
+    { id: "nfrs", label: "NFRs" },
+    { id: "adrs", label: "ADRs" },
+    { id: "integrations", label: "Integrations" },
+    { id: "spikes", label: "Spikes" },
+  ];
+
+  const tabStyle = t => ({
+    padding: "5px 12px", background: section === t ? "#e8f0fe" : "transparent",
+    border: section === t ? "1px solid #b3d4ff" : "1px solid transparent",
+    borderRadius: 6, cursor: "pointer", fontSize: 12, fontWeight: section === t ? 600 : 400,
+    color: section === t ? "#0052cc" : "#6b778c", fontFamily: "'DM Sans',sans-serif",
+  });
+
+  const nfrs = project.nfrs || [];
+  const adrs = project.adrs || [];
+  const integrations = project.integrations || [];
+  const spikes = project.spikes || [];
+
+  return (
+    <div>
+      <div className="sec-head">
+        <div><div className="sec-title">Tech Planning</div><div className="sec-sub">Architecture context, NFRs, ADRs, integrations, and open questions</div></div>
+        <button className="btn btn-ai" onClick={generatePlanning} disabled={generating}>
+          {generating ? "Generating..." : <><Sparkles size={13} /> AI Generate</>}
+        </button>
+      </div>
+
+      <div style={{ display: "flex", gap: 6, marginBottom: 20, flexWrap: "wrap" }}>
+        {tabs.map(t => <button key={t.id} style={tabStyle(t.id)} onClick={() => setSection(t.id)}>{t.label}</button>)}
+      </div>
+
+      {section === "architecture" && (
+        <div>
+          <div className="card">
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne',sans-serif" }}>System Context (C4 L1)</div>
+              {project.architectureNotes && <button className="btn btn-ghost btn-xs" onClick={() => navigator.clipboard.writeText(project.architectureNotes)}><Copy size={11} /> Copy</button>}
+            </div>
+            <textarea value={project.architectureNotes || ""} onChange={e => update({ architectureNotes: e.target.value })}
+              placeholder="Describe the system boundaries: what external systems interact, what users are involved, what are the main components. This becomes your C4 Level 1 diagram narrative..."
+              rows={8} />
+          </div>
+        </div>
+      )}
+
+      {section === "nfrs" && (
+        <div>
+          {nfrs.length === 0 ? (
+            <Empty icon={<Shield size={36} />} title="No NFRs defined" sub="Click 'AI Generate' to get started with relevant non-functional requirements" />
+          ) : nfrs.map((nfr, i) => (
+            <div key={i} className="card" style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
+              <span style={{ fontSize: 10, fontWeight: 700, color: MOSCOW_COLORS[nfr.priority]?.color || "#6b778c", background: MOSCOW_COLORS[nfr.priority]?.bg || "#f1f2f4", padding: "2px 7px", borderRadius: 4, fontFamily: "'DM Mono',monospace", flexShrink: 0, marginTop: 2 }}>{nfr.priority}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600, fontSize: 13, color: "#172b4d", marginBottom: 2 }}>{nfr.category}</div>
+                <div style={{ fontSize: 12, color: "#505f79" }}>{nfr.requirement}</div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {section === "adrs" && (
+        <div>
+          {adrs.length === 0 ? (
+            <Empty icon={<GitBranch size={36} />} title="No ADRs yet" sub="Architecture Decision Records capture key technical choices and their rationale" />
+          ) : adrs.map((adr, i) => (
+            <div key={i} className="card">
+              <div style={{ fontWeight: 700, fontSize: 14, color: "#172b4d", fontFamily: "'Syne',sans-serif", marginBottom: 10 }}>{adr.title}</div>
+              {[["Context", adr.context], ["Decision", adr.decision], ["Consequences", adr.consequences]].map(([k, v]) => v && (
+                <div key={k} style={{ marginBottom: 8 }}>
+                  <div style={{ fontSize: 10, fontWeight: 600, color: "#6b778c", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>{k}</div>
+                  <div style={{ fontSize: 13, color: "#505f79", lineHeight: 1.55 }}>{v}</div>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {section === "integrations" && (
+        <div>
+          {integrations.length === 0 ? (
+            <Empty icon={<Package size={36} />} title="No integrations mapped" sub="Document all external systems, APIs, and data sources the product will connect to" />
+          ) : (
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: "#f8f9fa" }}>
+                    {["System", "Direction", "Auth", "Notes"].map(h => <th key={h} style={{ padding: "8px 12px", textAlign: "left", fontSize: 11, color: "#6b778c", fontFamily: "'DM Mono',monospace", fontWeight: 600, textTransform: "uppercase", letterSpacing: ".05em", borderBottom: "1px solid #dfe1e6" }}>{h}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {integrations.map((int, i) => (
+                    <tr key={i} style={{ borderBottom: "1px solid #ebecf0" }}>
+                      <td style={{ padding: "8px 12px", fontWeight: 600, color: "#172b4d" }}>{int.system}</td>
+                      <td style={{ padding: "8px 12px" }}><span style={{ fontSize: 11, padding: "2px 6px", borderRadius: 4, background: int.direction === "in" ? "#e6f0ff" : "#e3fcef", color: int.direction === "in" ? "#0052cc" : "#00632b", fontFamily: "'DM Mono',monospace" }}>{int.direction}</span></td>
+                      <td style={{ padding: "8px 12px", color: "#505f79" }}>{int.auth}</td>
+                      <td style={{ padding: "8px 12px", color: "#6b778c" }}>{int.notes}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {section === "spikes" && (
+        <div>
+          {spikes.length === 0 ? (
+            <Empty icon={<Lightbulb size={36} />} title="No spikes identified" sub="Spikes are open technical questions that need investigation before estimating" />
+          ) : spikes.map((spike, i) => (
+            <div key={i} className="card" style={{ display: "flex", gap: 12, alignItems: "center" }}>
+              <div style={{ width: 24, height: 24, borderRadius: "50%", background: "#fff8e1", border: "1px solid #ffe999", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#7a5c00", flexShrink: 0 }}>{i + 1}</div>
+              <span style={{ fontSize: 13, color: "#344563", flex: 1 }}>{spike}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Discovery Design Planning ─────────────────────────────────────────────────
+function DiscoveryDesign({ project, update }) {
+  const [generating, setGenerating] = useState(false);
+
+  const generate = async () => {
+    setGenerating(true);
+    const mvpFlows = (project.backbone || []).flatMap(s => (s.epics || []).flatMap(e => (e.features || []).filter(f => f.slice === "mvp").map(f => `${s.stage} → ${f.title}`))).slice(0, 8);
+    const reply = await askClaude([{ role: "user", content: `Create a design planning document for:\nProject: ${project.name}\nAbout: ${project.about}\nIndustry: ${project.industry}\nPlatform: ${project.platform}\nMVP flows: ${mvpFlows.join(", ") || "TBD"}\n\nReturn JSON:\n{"researchPlan":"Markdown text with research goals, methods, and timeline","designPriorities":[{"flow":"...","reason":"...","week":"Week 1-2","dependencies":"..."}],"nextSteps":["Step 1","Step 2"],"assumptions":["Assumption 1"]}\n\nReturn only valid JSON.` }],
+      "Senior Design Lead. Practical, actionable design planning. Return only valid JSON.", 1500);
+    setGenerating(false);
+    const parsed = parseJSON(reply);
+    if (parsed) {
+      update({ designResearchPlan: parsed.researchPlan || "", designPriorities: parsed.designPriorities || [], designNextSteps: parsed.nextSteps || [], designAssumptions: parsed.assumptions || [] });
+    }
+  };
+
+  return (
+    <div>
+      <div className="sec-head">
+        <div><div className="sec-title">Design Planning</div><div className="sec-sub">Research plan, design priorities, and next steps for the design team</div></div>
+        <button className="btn btn-ai" onClick={generate} disabled={generating}>{generating ? "Generating..." : <><Sparkles size={13} /> AI Generate</>}</button>
+      </div>
+
+      <div className="card" style={{ marginBottom: 16 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne',sans-serif" }}>Research Plan</div>
+          {project.designResearchPlan && <button className="btn btn-ghost btn-xs" onClick={() => navigator.clipboard.writeText(project.designResearchPlan)}><Copy size={11} /> Copy</button>}
+        </div>
+        <textarea value={project.designResearchPlan || ""} onChange={e => update({ designResearchPlan: e.target.value })}
+          placeholder="Document research goals, methods (interviews, usability testing, surveys), participant plan, and timeline..." rows={6} />
+      </div>
+
+      {(project.designPriorities || []).length > 0 && (
+        <div className="card" style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne',sans-serif", marginBottom: 12 }}>Design Priorities for MVP</div>
+          {(project.designPriorities || []).map((p, i) => (
+            <div key={i} style={{ display: "flex", gap: 12, padding: "10px 0", borderBottom: "1px solid #ebecf0", alignItems: "flex-start" }}>
+              <span style={{ fontSize: 11, fontWeight: 600, color: "#0052cc", background: "#e6f0ff", padding: "2px 8px", borderRadius: 4, flexShrink: 0, marginTop: 1 }}>{p.week}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontWeight: 600, fontSize: 13, color: "#172b4d" }}>{p.flow}</div>
+                <div style={{ fontSize: 12, color: "#6b778c", marginTop: 2 }}>{p.reason}</div>
+                {p.dependencies && <div style={{ fontSize: 11, color: "#97a0af", marginTop: 3 }}>Depends on: {p.dependencies}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {(project.designNextSteps || []).length > 0 && (
+        <div className="card">
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne',sans-serif", marginBottom: 10 }}>Next Steps</div>
+          {(project.designNextSteps || []).map((step, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", padding: "5px 0", fontSize: 13, color: "#344563" }}>
+              <span style={{ color: "#36b37e", flexShrink: 0, marginTop: 1 }}>→</span> {step}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {!project.designResearchPlan && !generating && (
+        <Empty icon={<Palette size={36} />} title="No design plan yet"
+          sub="Generate a research plan and design priorities based on your story map"
+          action={<button className="btn btn-ai" onClick={generate}><Sparkles size={13} /> Generate Design Plan</button>} />
+      )}
+    </div>
+  );
+}
+
+// ─── Team Estimation ───────────────────────────────────────────────────────────
+function TeamEstimation({ project, update }) {
+  const [generating, setGenerating] = useState(false);
+  const [editingScenario, setEditingScenario] = useState(null);
+  const scenarios = project.scenarios || null;
+
+  const generateScenarios = async () => {
+    setGenerating(true);
+    const mvpPts = (project.backbone || []).flatMap(s => (s.epics || []).flatMap(e => (e.features || []).filter(f => f.slice === "mvp"))).length * 5;
+    const reply = await askClaude([{ role: "user", content: `Create 3 team scenarios for:\nProject: ${project.name}\nAbout: ${project.about}\nIndustry: ${project.industry}\nPlatform: ${project.platform}\nEst. MVP story points: ~${mvpPts || 150}\nClient type: ${project.clientType}\n\nReturn JSON:\n{"lean":{"name":"Lean","description":"...","roles":[{"role":"...","fte":1.0,"monthly":X}],"sprintVelocity":N,"mvpSprints":N,"mvpMonths":N,"totalCost":N,"pros":["..."],"cons":["..."]},"balanced":{same},"accelerated":{same}}\n\nUse realistic salary rates (CR-based team) in USD. Lean: 2-3 people. Balanced: 4-6. Accelerated: 7+. Return only valid JSON.` }],
+      "Senior delivery manager. Realistic team sizing and cost estimation for a Costa Rica-based team. Return only valid JSON.", 2500);
+    setGenerating(false);
+    const parsed = parseJSON(reply);
+    if (parsed) update({ scenarios: parsed });
+  };
+
+  const formatCost = n => n ? "$" + Number(n).toLocaleString() : "—";
+
+  const ScenarioCard = ({ key: k, data, color, label }) => {
+    if (!data) return null;
+    const total = (data.roles || []).reduce((a, r) => a + (r.monthly * r.fte), 0);
+    return (
+      <div className="card" style={{ borderTop: "3px solid " + color }}>
+        <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 15, color: "#172b4d", marginBottom: 4 }}>{data.name || label}</div>
+        <div style={{ fontSize: 12, color: "#6b778c", marginBottom: 14, lineHeight: 1.5 }}>{data.description}</div>
+
+        <div style={{ display: "flex", gap: 16, marginBottom: 14 }}>
+          {[["Timeline", data.mvpMonths + " mo"], ["Sprints", data.mvpSprints], ["Velocity", data.sprintVelocity + "pt/sprint"]].map(([l, v]) => (
+            <div key={l}>
+              <div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 2 }}>{l}</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color, fontFamily: "'Syne',sans-serif" }}>{v}</div>
+            </div>
+          ))}
+        </div>
+
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: "#6b778c", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 6 }}>Team</div>
+          {(data.roles || []).map((r, i) => (
+            <div key={i} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#344563", padding: "3px 0", borderBottom: "1px solid #f1f2f4" }}>
+              <span>{r.fte !== 1 ? r.fte + "x " : ""}{r.role}</span>
+              <span style={{ color: "#6b778c" }}>{formatCost(r.monthly)}/mo</span>
+            </div>
+          ))}
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 700, color: "#172b4d", padding: "6px 0", borderTop: "2px solid #dfe1e6", marginTop: 4 }}>
+            <span>Monthly Total</span>
+            <span style={{ color }}>{formatCost(total)}</span>
+          </div>
+          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#6b778c", padding: "2px 0" }}>
+            <span>MVP Total Investment</span>
+            <span style={{ fontWeight: 600, color: "#172b4d" }}>{formatCost(total * (data.mvpMonths || 1))}</span>
+          </div>
+        </div>
+
+        <div style={{ display: "flex", gap: 12 }}>
+          <div style={{ flex: 1 }}>
+            {(data.pros || []).map((p, i) => <div key={i} style={{ fontSize: 11, color: "#00632b", display: "flex", gap: 4 }}>✓ {p}</div>)}
+          </div>
+          <div style={{ flex: 1 }}>
+            {(data.cons || []).map((c, i) => <div key={i} style={{ fontSize: 11, color: "#de350b", display: "flex", gap: 4 }}>✕ {c}</div>)}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const recommendedText = scenarios ? `Based on the project scope and discovery outputs, here are 3 delivery scenarios:\n\n` +
+    ["lean", "balanced", "accelerated"].map(k => {
+      const d = scenarios[k];
+      if (!d) return "";
+      const roles = (d.roles || []).map(r => r.role).join(", ");
+      const total = (d.roles || []).reduce((a, r) => a + r.monthly * r.fte, 0);
+      return `**${d.name}**\nTeam: ${roles}\nTimeline: ${d.mvpMonths} months to MVP\nVelocity: ${d.sprintVelocity}pt/sprint\nMonthly cost: $${total.toLocaleString()}\nTotal investment: $${(total * d.mvpMonths).toLocaleString()}\n`;
+    }).join("\n") : "";
+
+  return (
+    <div>
+      <div className="sec-head">
+        <div><div className="sec-title">Team & Estimation</div><div className="sec-sub">Three team scenarios with timeline and cost comparison</div></div>
+        <div className="sec-actions">
+          {scenarios && <button className="btn btn-ghost btn-sm" onClick={() => navigator.clipboard.writeText(recommendedText)}><Copy size={12} /> Copy Comparison</button>}
+          <button className="btn btn-ai" onClick={generateScenarios} disabled={generating}>{generating ? "Generating..." : <><Sparkles size={13} /> Generate Scenarios</>}</button>
+        </div>
+      </div>
+
+      {generating && (
+        <div className="card" style={{ textAlign: "center", padding: "40px" }}>
+          <div style={{ display: "inline-flex", gap: 6, marginBottom: 14 }}><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div>
+          <div style={{ fontSize: 13, color: "#6b778c" }}>Calculating team scenarios, timelines and costs...</div>
+        </div>
+      )}
+
+      {!scenarios && !generating && (
+        <Empty icon={<BarChart2 size={36} />} title="No scenarios generated yet"
+          sub="AI will create 3 team options — Lean, Balanced, and Accelerated — with costs and timelines"
+          action={<button className="btn btn-ai" onClick={generateScenarios}><Sparkles size={13} /> Generate Scenarios</button>} />
+      )}
+
+      {scenarios && !generating && (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
+          <ScenarioCard k="lean" data={scenarios.lean} color="#36b37e" label="Lean" />
+          <ScenarioCard k="balanced" data={scenarios.balanced} color="#0052cc" label="Balanced" />
+          <ScenarioCard k="accelerated" data={scenarios.accelerated} color="#e8c547" label="Accelerated" />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Discovery Presentation ────────────────────────────────────────────────────
+function DiscoveryPresentation({ project, update, onGraduate }) {
+  const [generating, setGenerating] = useState(false);
+  const [narrative, setNarrative] = useState(project.presentationNotes || "");
+
+  const generateNarrative = async () => {
+    setGenerating(true);
+    const mvpFeatures = (project.backbone || []).flatMap(s => (s.epics || []).flatMap(e => (e.features || []).filter(f => f.slice === "mvp").map(f => f.title))).slice(0, 10);
+    const risks = (project.risks || []).slice(0, 4).map(r => typeof r === "string" ? r : r.text);
+    const reply = await askClaude([{ role: "user", content: `Write an executive-level client presentation narrative for a discovery handoff.\n\nProject: ${project.name}\nClient: ${project.clientType}\nAbout: ${project.about}\nIndustry: ${project.industry}\nMVP features: ${mvpFeatures.join(", ")}\nRisks: ${risks.join(", ")}\nSessions conducted: ${(project.sessions || []).length}\n\nWrite a clear, confident narrative covering:\n1. What we discovered (vision, users, key insights)\n2. What we're proposing to build (MVP scope)\n3. Why this approach (rationale)\n4. Key risks and mitigations\n5. Recommended next steps\n\nTone: confident, clear, executive-level. No bullet point soup. Paragraphs with clear headers. 400-500 words.` }],
+      "Senior delivery consultant. Write crisp, confident executive narratives. No fluff.", 1200);
+    setNarrative(reply);
+    update({ presentationNotes: reply });
+    setGenerating(false);
+  };
+
+  const sections = [
+    {
+      label: "1. Vision & Goals",
+      content: project.about + (project.assumptions?.length ? "\n\nKey assumptions:\n" + (project.assumptions || []).slice(0, 4).join("\n") : "")
+    },
+    {
+      label: "2. Discovery Outputs",
+      content: [
+        `Sessions conducted: ${(project.sessions || []).length}`,
+        `Risks identified: ${(project.risks || []).length}`,
+        `Opportunities: ${(project.opportunities || []).length}`,
+        "",
+        ...(project.risks || []).slice(0, 4).map(r => "⚠ " + (typeof r === "string" ? r : r.text)),
+        "",
+        ...(project.opportunities || []).slice(0, 4).map(o => "✓ " + (typeof o === "string" ? o : o.text)),
+      ].join("\n")
+    },
+    {
+      label: "3. MVP Scope (Story Map)",
+      content: (project.backbone || []).map(s =>
+        `${s.stage}:\n` + (s.epics || []).flatMap(e => (e.features || []).filter(f => f.slice === "mvp").map(f => `  • [${f.moscow}] ${f.title}`)).join("\n")
+      ).join("\n\n") || "Story map not yet defined"
+    },
+    {
+      label: "4. Team & Investment",
+      content: project.scenarios ? ["lean", "balanced", "accelerated"].map(k => {
+        const d = project.scenarios[k];
+        if (!d) return "";
+        const total = (d.roles || []).reduce((a, r) => a + r.monthly * r.fte, 0);
+        return `${d.name}: ${d.mvpMonths} months · $${total.toLocaleString()}/mo · $${(total * d.mvpMonths).toLocaleString()} total`;
+      }).join("\n") : "Scenarios not yet generated"
+    },
+    {
+      label: "5. Architecture & Tech",
+      content: project.architectureNotes || "Architecture notes not yet defined"
+    },
+    {
+      label: "6. Design Plan",
+      content: project.designResearchPlan || "Design plan not yet defined"
+    },
+  ];
+
+  const allContent = sections.map(s => `${s.label}\n${"─".repeat(40)}\n${s.content}`).join("\n\n\n");
+  const narrativeAndSections = (narrative ? narrative + "\n\n" : "") + allContent;
+
+  return (
+    <div>
+      <div className="sec-head">
+        <div><div className="sec-title">Client Presentation</div><div className="sec-sub">Consolidated discovery output — copy to Confluence or export</div></div>
+        <div className="sec-actions">
+          <button className="btn btn-ghost" onClick={() => navigator.clipboard.writeText(narrativeAndSections)}><Copy size={13} /> Copy All</button>
+          <button className="btn btn-ai" onClick={generateNarrative} disabled={generating}><Sparkles size={13} /> {generating ? "Writing..." : "Generate Narrative"}</button>
+          <button className="btn btn-primary" onClick={onGraduate}><Rocket size={13} /> Move to Delivery</button>
+        </div>
+      </div>
+
+      {/* Executive narrative */}
+      {(narrative || generating) && (
+        <div className="card" style={{ marginBottom: 20, borderLeft: "4px solid #e8c547" }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne',sans-serif" }}>Executive Summary</div>
+            <button className="btn btn-ghost btn-xs" onClick={() => navigator.clipboard.writeText(narrative)}><Copy size={11} /> Copy</button>
+          </div>
+          {generating
+            ? <div style={{ display: "flex", gap: 6, padding: "8px 0" }}><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div>
+            : <textarea value={narrative} onChange={e => { setNarrative(e.target.value); update({ presentationNotes: e.target.value }); }} rows={10} style={{ lineHeight: 1.75 }} />}
+        </div>
+      )}
+
+      {/* All sections as copyable blocks */}
+      {sections.map(s => (
+        <CopyBox key={s.label} label={s.label} content={s.content} />
+      ))}
+
+      {/* Graduate to delivery CTA */}
+      <div className="card" style={{ background: "rgba(232,197,71,.06)", border: "1px solid rgba(232,197,71,.3)", textAlign: "center", padding: "24px" }}>
+        <Rocket size={24} color="#7a6000" style={{ marginBottom: 10 }} />
+        <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 16, color: "#172b4d", marginBottom: 6 }}>Discovery Complete?</div>
+        <div style={{ fontSize: 13, color: "#6b778c", marginBottom: 16 }}>Move this project to Delivery mode to start creating stories, sprints, and tracking bugs.</div>
+        <button className="btn btn-primary" onClick={onGraduate}><Rocket size={13} /> Move to Delivery</button>
+      </div>
+    </div>
   );
 }

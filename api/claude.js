@@ -3,7 +3,7 @@ export default async function handler(req, res) {
     return res.status(405).json({ error: "Method not allowed" });
   }
 
-  const { messages, system } = req.body;
+  const { messages, system, maxTokens = 1000 } = req.body;
 
   try {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
@@ -15,7 +15,7 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: "claude-sonnet-4-20250514",
-        max_tokens: 1000,
+        max_tokens: maxTokens,
         system: system || "",
         messages,
       }),
