@@ -864,6 +864,7 @@ export default function App() {
     "d-meetings": <DiscoveryMeetingPrep project={project} update={update} />,
     "d-sessions": <DiscoverySessions project={project} update={update} />,
     "d-docs": <DiscoveryDocuments project={project} update={update} />,
+    "d-todos": <DiscoveryTodos project={project} update={update} />,
     "d-stakeholders": <DiscoveryStakeholders project={project} update={update} />,
     "d-ai": <DiscoveryAIColleague project={project} update={update} />,
     "d-storymap": <StoryMappingSection project={project} update={update} />,
@@ -944,6 +945,7 @@ function Sidebar({ projects, pid, setPid, section, setSection, onNew, jiraConnec
     { id: "d-meetings", label: "Meeting Prep", Icon: ClipboardList, section: "DISCOVERY" },
     { id: "d-sessions", label: "Sessions & Outputs", Icon: FileText, section: null },
     { id: "d-docs", label: "Research Docs", Icon: Upload, section: null },
+    { id: "d-todos", label: "To Do", Icon: CheckCircle2, section: null },
     { id: "d-stakeholders", label: "Stakeholders", Icon: Users, section: null },
     { id: "d-storymap", label: "Story Mapping", Icon: Map, section: "MAPPING" },
     { id: "d-planning", label: "Tech Planning", Icon: Cpu, section: "PLANNING" },
@@ -4060,6 +4062,7 @@ function DiscoveryOverview({ project, update, setSection }) {
             { id: "d-meetings", label: "Meeting Prep", desc: "Generate agenda & prepare questions", Icon: ClipboardList },
             { id: "d-sessions", label: "Sessions", desc: "Log notes, extract insights with AI", Icon: FileText },
             { id: "d-docs", label: "Research Docs", desc: "Upload PDFs & briefs, AI extracts insights", Icon: Upload },
+            { id: "d-todos", label: "To Do", desc: "Tasks from sessions, meetings, or AI", Icon: CheckCircle2 },
             { id: "d-stakeholders", label: "Stakeholders", desc: "Map influence, auto-fill from sessions", Icon: Users },
             { id: "d-ai", label: "AI Colleague", desc: "Validate ideas, prep meetings, find gaps", Icon: Bot },
             { id: "d-storymap", label: "Story Mapping", desc: "Backbone → Epics → Features", Icon: Map },
@@ -4699,6 +4702,218 @@ function DiscoveryDocuments({ project, update }) {
   );
 }
 
+// ─── Discovery To Do ──────────────────────────────────────────────────────────
+function DiscoveryTodos({ project, update }) {
+  const blank = { task: "", owner: "" };
+  const [modal, setModal] = useState(null);
+  const [form, setForm] = useState(blank);
+  const [extracting, setExtracting] = useState(false);
+  const [filter, setFilter] = useState("open"); // open | done | all
+
+  const todos = project.todos || [];
+  const sessions = project.sessions || [];
+
+  const save = () => {
+    if (!form.task.trim()) return;
+    if (form.id) {
+      update({ todos: todos.map(t => t.id === form.id ? { ...form } : t) });
+    } else {
+      update({ todos: [...todos, { ...form, id: uid(), done: false, source: "manual", createdAt: new Date().toISOString().split("T")[0] }] });
+    }
+    setModal(null);
+    setForm(blank);
+  };
+
+  const toggle = (id) => update({ todos: todos.map(t => t.id === id ? { ...t, done: !t.done } : t) });
+  const del = (id) => update({ todos: todos.filter(t => t.id !== id) });
+  const edit = (t) => { setForm(t); setModal("edit"); };
+
+  const extractFromSessions = async () => {
+    if (!sessions.length) return;
+    setExtracting(true);
+    setModal("suggest");
+    const sessionData = sessions.map(s =>
+      `Session: "${s.title}" (${s.date})\nParticipants: ${s.participants}\nNotes: ${s.notes || "none"}\nOpen questions: ${s.outputs?.openQuestions?.join(", ") || "none"}\nKey decisions: ${s.outputs?.keyDecisions?.join(", ") || "none"}`
+    ).join("\n\n");
+
+    const reply = await askClaude([{ role: "user", content:
+      `Extract action items and to-dos from these discovery session records.\n\nProject: ${project.name}\n\n${sessionData}\n\nReturn a JSON array of action items:\n[{ "task": "specific action to take", "owner": "role responsible (e.g. PM, Design Lead, CTO)", "source": "session title" }]\n\nOnly include concrete, actionable items — not vague observations. Return only valid JSON array.`
+    }], "Extract action items from meeting notes. Return only valid JSON array.", 1000);
+
+    setExtracting(false);
+    const parsed = parseJSON(reply);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      const suggestions = parsed.map(t => ({ ...t, id: uid(), _selected: true }));
+      update({ _todoSuggestions: suggestions });
+    } else {
+      update({ _todoSuggestions: [] });
+    }
+  };
+
+  const suggestions = project._todoSuggestions || [];
+
+  const acceptSuggestions = () => {
+    const toAdd = suggestions.filter(s => s._selected).map(({ _selected, ...s }) => ({
+      ...s, done: false, createdAt: new Date().toISOString().split("T")[0]
+    }));
+    update({ todos: [...todos, ...toAdd], _todoSuggestions: undefined });
+    setModal(null);
+  };
+
+  const visible = todos.filter(t => filter === "all" ? true : filter === "done" ? t.done : !t.done);
+  const openCount = todos.filter(t => !t.done).length;
+  const doneCount = todos.filter(t => t.done).length;
+
+  const sourceColor = (src) => {
+    if (!src || src === "manual") return { bg: "#f1f2f4", color: "#6b778c" };
+    if (src === "AI colleague") return { bg: "rgba(232,197,71,.15)", color: "#7a6000" };
+    return { bg: "#e6f0ff", color: "#0052cc" };
+  };
+
+  return (
+    <div>
+      <div className="sec-head">
+        <div>
+          <div className="sec-title">To Do</div>
+          <div className="sec-sub">Action items from sessions, meetings, and AI — tracked in one place</div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          {sessions.length > 0 && (
+            <button className="btn btn-ai" onClick={extractFromSessions} disabled={extracting}>
+              <Sparkles size={13} /> Extract from sessions
+            </button>
+          )}
+          <button className="btn btn-primary" onClick={() => { setForm(blank); setModal("edit"); }}>
+            <Plus size={13} /> Add task
+          </button>
+        </div>
+      </div>
+
+      {/* Filter tabs */}
+      {todos.length > 0 && (
+        <div style={{ display: "flex", gap: 4, marginBottom: 16 }}>
+          {[
+            { id: "open", label: `Open (${openCount})` },
+            { id: "done", label: `Done (${doneCount})` },
+            { id: "all", label: `All (${todos.length})` },
+          ].map(f => (
+            <button key={f.id} onClick={() => setFilter(f.id)}
+              style={{ padding: "5px 12px", borderRadius: 6, border: "1px solid", fontSize: 12, fontWeight: 500, cursor: "pointer", fontFamily: "'DM Sans',sans-serif", transition: "all .12s",
+                background: filter === f.id ? "#172b4d" : "transparent",
+                borderColor: filter === f.id ? "#172b4d" : "#dfe1e6",
+                color: filter === f.id ? "#ffffff" : "#6b778c" }}>
+              {f.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {todos.length === 0 ? (
+        <Empty icon={<CheckCircle2 size={36} />} title="No tasks yet"
+          sub="Add action items manually, extract from sessions, or ask the AI Colleague"
+          action={
+            <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
+              {sessions.length > 0 && <button className="btn btn-ai" onClick={extractFromSessions}><Sparkles size={13} /> Extract from sessions</button>}
+              <button className="btn btn-primary" onClick={() => { setForm(blank); setModal("edit"); }}><Plus size={13} /> Add task</button>
+            </div>
+          } />
+      ) : visible.length === 0 ? (
+        <div style={{ textAlign: "center", padding: "40px 0", fontSize: 13, color: "#97a0af" }}>
+          No {filter} tasks.
+        </div>
+      ) : (
+        visible.map(t => (
+          <div key={t.id} className="card" style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 8, opacity: t.done ? 0.6 : 1 }}>
+            <button onClick={() => toggle(t.id)} style={{ background: "none", border: "none", cursor: "pointer", padding: "2px 0", flexShrink: 0, marginTop: 1 }}>
+              {t.done
+                ? <CheckCircle2 size={18} color="#36b37e" />
+                : <Circle size={18} color="#dfe1e6" />}
+            </button>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 13, color: t.done ? "#97a0af" : "#172b4d", fontWeight: 500, textDecoration: t.done ? "line-through" : "none", lineHeight: 1.5, marginBottom: 4 }}>{t.task}</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                {t.owner && (
+                  <span style={{ fontSize: 11, fontWeight: 600, color: "#344563", background: "#f1f2f4", padding: "1px 7px", borderRadius: 4, fontFamily: "'DM Mono',monospace" }}>
+                    {t.owner}
+                  </span>
+                )}
+                {t.source && (
+                  <span style={{ fontSize: 10, fontWeight: 600, padding: "1px 7px", borderRadius: 4, fontFamily: "'DM Mono',monospace", ...sourceColor(t.source) }}>
+                    {t.source}
+                  </span>
+                )}
+                {t.createdAt && <span style={{ fontSize: 11, color: "#b3bac5" }}>{t.createdAt}</span>}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+              <button className="icon-btn" onClick={() => edit(t)}><Edit2 size={13} /></button>
+              <button className="icon-btn" onClick={() => del(t.id)}><Trash2 size={13} /></button>
+            </div>
+          </div>
+        ))
+      )}
+
+      {/* Add / Edit modal */}
+      {modal === "edit" && (
+        <Modal title={form.id ? "Edit Task" : "New Task"} onClose={() => { setModal(null); setForm(blank); }}
+          footer={<><button className="btn btn-ghost" onClick={() => { setModal(null); setForm(blank); }}>Cancel</button><button className="btn btn-primary" onClick={save}>Save</button></>}>
+          <div className="field">
+            <label>Task</label>
+            <textarea value={form.task} onChange={e => setForm(f => ({ ...f, task: e.target.value }))}
+              placeholder="e.g. Follow up with CTO on API constraints" rows={2} autoFocus />
+          </div>
+          <div className="field">
+            <label>Owner</label>
+            <input value={form.owner} onChange={e => setForm(f => ({ ...f, owner: e.target.value }))}
+              placeholder="e.g. PM, Design Lead, Client" />
+          </div>
+        </Modal>
+      )}
+
+      {/* Session extraction modal */}
+      {modal === "suggest" && (
+        <Modal title="Extract tasks from sessions" onClose={() => { setModal(null); update({ _todoSuggestions: undefined }); }}
+          footer={
+            !extracting && suggestions.length > 0
+              ? <><button className="btn btn-ghost" onClick={() => { setModal(null); update({ _todoSuggestions: undefined }); }}>Cancel</button>
+                  <button className="btn btn-primary" onClick={acceptSuggestions}>
+                    <Check size={13} /> Add selected ({suggestions.filter(s => s._selected).length})
+                  </button></>
+              : <button className="btn btn-ghost" onClick={() => { setModal(null); update({ _todoSuggestions: undefined }); }}>Close</button>
+          }>
+          {extracting ? (
+            <div style={{ textAlign: "center", padding: "32px 0" }}>
+              <div style={{ display: "flex", gap: 6, justifyContent: "center", marginBottom: 12 }}><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div>
+              <div style={{ fontSize: 13, color: "#505f79" }}>Reading {sessions.length} session{sessions.length > 1 ? "s" : ""}…</div>
+            </div>
+          ) : suggestions.length === 0 ? (
+            <div style={{ textAlign: "center", padding: "24px 0", fontSize: 13, color: "#6b778c" }}>No action items found in session notes.</div>
+          ) : (
+            <div>
+              <p style={{ fontSize: 13, color: "#6b778c", marginBottom: 16, lineHeight: 1.6 }}>
+                Found {suggestions.length} action item{suggestions.length > 1 ? "s" : ""}. Select the ones to add.
+              </p>
+              {suggestions.map((s, i) => (
+                <div key={s.id} style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "10px 0", borderBottom: i < suggestions.length - 1 ? "1px solid #ebecf0" : "none" }}>
+                  <input type="checkbox" checked={s._selected} onChange={e => update({ _todoSuggestions: suggestions.map((p, j) => j === i ? { ...p, _selected: e.target.checked } : p) })}
+                    style={{ marginTop: 3, accentColor: "#e8c547", flexShrink: 0 }} />
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 13, color: "#172b4d", fontWeight: 500, marginBottom: 3 }}>{s.task}</div>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      {s.owner && <span style={{ fontSize: 11, fontWeight: 600, color: "#344563", background: "#f1f2f4", padding: "1px 7px", borderRadius: 4, fontFamily: "'DM Mono',monospace" }}>{s.owner}</span>}
+                      {s.source && <span style={{ fontSize: 10, color: "#0052cc", background: "#e6f0ff", padding: "1px 7px", borderRadius: 4, fontFamily: "'DM Mono',monospace", fontWeight: 600 }}>{s.source}</span>}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Modal>
+      )}
+    </div>
+  );
+}
+
 // ─── Discovery Stakeholders ───────────────────────────────────────────────────
 function DiscoveryStakeholders({ project, update }) {
   const blank = { name: "", role: "", influence: "Medium", availability: "Available", notes: "" };
@@ -4964,7 +5179,7 @@ To CREATE artifacts, include this block in your reply:
 ARTIFACTS:
 ${FENCE}json
 {
-  "type": "risks|opportunities|assumptions|flows",
+  "type": "risks|opportunities|assumptions|flows|todos",
   "items": [...]
 }
 ${FENCE}
@@ -4973,6 +5188,7 @@ risks items: [{ "text": "risk description", "source": "reasoning" }]
 opportunities items: [{ "text": "opportunity description", "source": "reasoning" }]
 assumptions items: ["assumption string", ...]
 flows items: ["User flow description", ...]
+todos items: [{ "task": "specific action", "owner": "role (e.g. PM, Design Lead)" }]
 
 Be specific to this project. Reference what's already known. Challenge vague statements. Ask good questions.`;
 
@@ -5020,6 +5236,10 @@ Be specific to this project. Reference what's already known. Challenge vague sta
     } else if (type === "flows") {
       update({ flows: [...flows, ...items] });
       setMsgs(prev => [...prev, { role: "ai", text: `✓ Added ${items.length} user flow${items.length > 1 ? "s" : ""} to the project.` }]);
+    } else if (type === "todos") {
+      const newTodos = items.map(t => ({ ...t, id: uid(), done: false, source: "AI colleague", createdAt: new Date().toISOString().split("T")[0] }));
+      update({ todos: [...(project.todos || []), ...newTodos] });
+      setMsgs(prev => [...prev, { role: "ai", text: `✓ Added ${newTodos.length} task${newTodos.length > 1 ? "s" : ""} to To Do.` }]);
     }
     setPending(null);
   };
@@ -5031,7 +5251,7 @@ Be specific to this project. Reference what's already known. Challenge vague sta
 
   const ArtifactPreview = ({ pending }) => {
     const { type, items } = pending;
-    const typeLabel = { risks: "Risk", opportunities: "Opportunity", assumptions: "Assumption", flows: "User Flow" }[type] || type;
+    const typeLabel = { risks: "Risk", opportunities: "Opportunity", assumptions: "Assumption", flows: "User Flow", todos: "Task" }[type] || type;
     return (
       <div style={{ margin: "12px 0 8px", background: "#f8f9fa", border: "1px solid rgba(232,197,71,.25)", borderRadius: 10, overflow: "hidden" }}>
         <div style={{ padding: "10px 14px", background: "rgba(232,197,71,.12)", borderBottom: "1px solid rgba(232,197,71,.15)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
@@ -5047,8 +5267,9 @@ Be specific to this project. Reference what's already known. Challenge vague sta
         <div style={{ padding: "10px 14px", maxHeight: 220, overflowY: "auto" }}>
           {items.map((item, i) => (
             <div key={i} style={{ padding: "6px 0", borderBottom: i < items.length - 1 ? "1px solid #dfe1e6" : "none", fontSize: 13, color: "#344563" }}>
-              {typeof item === "string" ? item : item.text}
-              {item.source && <span style={{ fontSize: 11, color: "#97a0af", marginLeft: 8 }}>— {item.source}</span>}
+              {typeof item === "string" ? item : (item.task || item.text)}
+              {item.owner && <span style={{ fontSize: 11, fontWeight: 600, color: "#344563", background: "#f1f2f4", padding: "1px 6px", borderRadius: 4, marginLeft: 8, fontFamily: "'DM Mono',monospace" }}>{item.owner}</span>}
+              {item.source && !item.owner && <span style={{ fontSize: 11, color: "#97a0af", marginLeft: 8 }}>— {item.source}</span>}
             </div>
           ))}
         </div>
