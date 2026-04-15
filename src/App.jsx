@@ -2247,17 +2247,54 @@ Generate ${existing > 0 ? "additional" : "comprehensive"} test cases covering al
         <Modal wide title={form.id ? "Edit Story" : "Story Details"} onClose={() => setModal(null)}
           footer={
             <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
-              {form.id && (
-                <button className="btn btn-ai btn-sm" onClick={async () => { const s = project.stories.find(x => x.id === form.id); if (!s) return; await improveStory(s); const updated = project.stories.find(x => x.id === form.id); if (updated) setForm(updated); }} disabled={improving === form.id}>
-                  {improving === form.id ? "Improving..." : <><Sparkles size={12} /> Improve with AI</>}
-                </button>
-              )}
               <div style={{ display: "flex", gap: 8, marginLeft: "auto" }}>
                 <button className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button>
                 <button className="btn btn-primary" onClick={save}>Save Story</button>
               </div>
             </div>
           }>
+          {form.id && (
+            <button
+              className="btn btn-ai"
+              style={{ width: "100%", marginBottom: 16, justifyContent: "center", padding: "10px 0", fontSize: 13 }}
+              onClick={async () => {
+                const s = project.stories.find(x => x.id === form.id);
+                if (!s) return;
+                await improveStory(s);
+                const updated = project.stories.find(x => x.id === form.id);
+                if (updated) {
+                  setForm(updated);
+                  // also generate test cases using the updated story
+                  setGeneratingTCs(true);
+                  const existing = (updated.testCases || []).length;
+                  const reply = await askClaude([{
+                    role: "user",
+                    content: `Generate test cases for this user story.\n\nSTORY: ${updated.title}\nDESCRIPTION: ${updated.description}\nACCEPTANCE CRITERIA:\n${updated.ac}\n\n${TC_STANDARD}\n\nReturn JSON array only:\n[\n  {\n    "code": "TC-001",\n    "title": "...",\n    "type": "positive",\n    "preconditions": "...",\n    "steps": "1. ...\\n2. ...\\n3. ...",\n    "expected": "..."\n  }\n]\n\nGenerate ${existing > 0 ? "additional" : "comprehensive"} test cases covering all AC scenarios. Return only the JSON array.`
+                  }], "You are a senior QA engineer. Generate structured test cases. Return only a valid JSON array.", 2000);
+                  setGeneratingTCs(false);
+                  const parsed = parseJSON(reply) || parseJSON(reply.replace(/^```(?:json)?\s*/i, "").replace(/\n?```\s*$/, "").trim());
+                  if (Array.isArray(parsed)) {
+                    const newCases = parsed.map((tc, i) => ({
+                      id: uid(),
+                      code: tc.code || `TC-${String(existing + i + 1).padStart(3, "0")}`,
+                      title: tc.title || "",
+                      type: tc.type || "positive",
+                      preconditions: tc.preconditions || "",
+                      steps: tc.steps || "",
+                      expected: tc.expected || "",
+                      status: "not-run",
+                    }));
+                    setForm(f => ({ ...f, testCases: [...(f.testCases || []), ...newCases] }));
+                  }
+                }
+              }}
+              disabled={improving === form.id || generatingTCs}
+            >
+              {(improving === form.id || generatingTCs)
+                ? <><div className="ai-dot" /><div className="ai-dot" style={{ animationDelay: ".2s" }} /><div className="ai-dot" style={{ animationDelay: ".4s" }} /> {improving === form.id ? "Improving story…" : "Generating test cases…"}</>
+                : <><Sparkles size={13} /> Improve with AI — refine story &amp; generate test cases</>}
+            </button>
+          )}
           <div className="row">
             <div className="field" style={{ flex: 2 }}><label>Title</label><input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} placeholder="[FE] Auth | Login screen" /></div>
             <div className="field"><label>Epic</label>
