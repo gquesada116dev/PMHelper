@@ -9,7 +9,7 @@ import {
   MoreVertical, ArrowRight, CheckCircle2, Circle, Link, Link2, ExternalLink,
   Settings, Unlink, Search, Map, Cpu, FileText, DollarSign, Presentation,
   ChevronUp, Copy, GripVertical, BarChart2, GitBranch, Package, Rocket,
-  ClipboardList, Lightbulb, Compass, ArrowUpRight, Upload
+  ClipboardList, Lightbulb, Compass, ArrowUpRight, Upload, LogOut
 } from "lucide-react";
 
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -787,8 +787,74 @@ function AILoader() {
   );
 }
 
+// ─── Login Screen ─────────────────────────────────────────────────────────────
+function LoginScreen() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+
+  const submit = async (e) => {
+    e.preventDefault();
+    if (!email.trim() || !password) return;
+    setLoading(true);
+    setError("");
+    const { error: err } = await supabase.auth.signInWithPassword({ email: email.trim(), password });
+    setLoading(false);
+    if (err) setError(err.message);
+  };
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#f4f5f7", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'DM Sans', sans-serif" }}>
+      <div style={{ width: 380, background: "#fff", border: "1px solid #dfe1e6", borderRadius: 16, padding: "36px 32px", boxShadow: "0 8px 32px rgba(9,30,66,.1)" }}>
+        <div style={{ marginBottom: 28, textAlign: "center" }}>
+          <div style={{ fontSize: 22, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne', sans-serif", letterSpacing: "-.025em", marginBottom: 4 }}>ProductOS</div>
+          <div style={{ fontSize: 13, color: "#97a0af" }}>Sign in to your workspace</div>
+        </div>
+        <form onSubmit={submit}>
+          <div className="field">
+            <label style={{ fontSize: 12, fontWeight: 600, color: "#344563", display: "block", marginBottom: 5 }}>Email</label>
+            <input
+              type="email"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              placeholder="you@company.com"
+              autoFocus
+              style={{ width: "100%", padding: "9px 12px", borderRadius: 7, border: "1px solid #dfe1e6", fontSize: 13, color: "#172b4d", outline: "none", boxSizing: "border-box", fontFamily: "'DM Sans', sans-serif" }}
+            />
+          </div>
+          <div className="field">
+            <label style={{ fontSize: 12, fontWeight: 600, color: "#344563", display: "block", marginBottom: 5 }}>Password</label>
+            <input
+              type="password"
+              value={password}
+              onChange={e => setPassword(e.target.value)}
+              placeholder="••••••••"
+              style={{ width: "100%", padding: "9px 12px", borderRadius: 7, border: "1px solid #dfe1e6", fontSize: 13, color: "#172b4d", outline: "none", boxSizing: "border-box", fontFamily: "'DM Sans', sans-serif" }}
+            />
+          </div>
+          {error && (
+            <div style={{ background: "#ffebe6", border: "1px solid rgba(222,53,11,.2)", borderRadius: 7, padding: "9px 12px", fontSize: 12, color: "#de350b", marginBottom: 14 }}>
+              {error}
+            </div>
+          )}
+          <button
+            type="submit"
+            disabled={loading || !email.trim() || !password}
+            style={{ width: "100%", padding: "10px 0", background: "#e8c547", color: "#3d2e00", border: "none", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", opacity: (loading || !email.trim() || !password) ? 0.6 : 1, transition: "all .15s" }}
+          >
+            {loading ? "Signing in…" : "Sign In"}
+          </button>
+        </form>
+      </div>
+    </div>
+  );
+}
+
 // ─── App Root ─────────────────────────────────────────────────────────────────
 export default function App() {
+  const [user, setUser] = useState(null);
+  const [authLoading, setAuthLoading] = useState(true);
   const [projects, setProjects] = useState([]);
   const [pid, setPid] = useState(null);
   const [section, setSection] = useState("overview");
@@ -797,7 +863,20 @@ export default function App() {
   const [showGraduation, setShowGraduation] = useState(false);
   const [loading, setLoading] = useState(true);
 
+  // Auth: check session once, then listen for changes
   useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setUser(session?.user ?? null);
+      setAuthLoading(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setUser(session?.user ?? null);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return; // only load projects when logged in
     (async () => {
       const { data, error } = await supabase
         .from("projects")
@@ -820,7 +899,7 @@ export default function App() {
       }
       setLoading(false);
     })();
-  }, []);
+  }, [user]);
 
   const project = projects.find(p => p.id === pid);
 
@@ -873,6 +952,16 @@ export default function App() {
 
   const sections = isDiscovery ? discoverySections : deliverySections;
 
+  if (authLoading) {
+    return (
+      <div style={{ minHeight: "100vh", background: "#f4f5f7", display: "flex", alignItems: "center", justifyContent: "center" }}>
+        <Loader size={20} color="#97a0af" />
+      </div>
+    );
+  }
+
+  if (!user) return <LoginScreen />;
+
   if (loading) {
     return (
       <div className="app" style={{ alignItems: "center", justifyContent: "center" }}>
@@ -893,7 +982,7 @@ export default function App() {
       <Sidebar projects={projects} pid={pid} setPid={id => { setPid(id); setSection(projects.find(p => p.id === id)?.mode === "discovery" ? "d-overview" : "overview"); }}
         section={section} setSection={setSection} onNew={() => setShowNew(true)}
         jiraConnected={!!project?.jira?.connected} syncTool={detectTool(project?.syncUrl)} onSync={() => setShowSync(true)}
-        isDiscovery={isDiscovery} />
+        isDiscovery={isDiscovery} user={user} onSignOut={() => supabase.auth.signOut()} />
       <main className="main">{project && sections[section]}</main>
       {showNew && (
         <NewProjectModal onClose={() => setShowNew(false)} onCreate={handleCreate} />
@@ -919,7 +1008,7 @@ export default function App() {
 }
 
 // ─── Sidebar ──────────────────────────────────────────────────────────────────
-function Sidebar({ projects, pid, setPid, section, setSection, onNew, jiraConnected, syncTool, onSync, isDiscovery }) {
+function Sidebar({ projects, pid, setPid, section, setSection, onNew, jiraConnected, syncTool, onSync, isDiscovery, user, onSignOut }) {
   const [open, setOpen] = useState(false);
   const proj = projects.find(p => p.id === pid);
 
@@ -1018,6 +1107,16 @@ function Sidebar({ projects, pid, setPid, section, setSection, onNew, jiraConnec
             {jiraConnected ? "Jira connected" : syncTool ? syncTool.label + " linked" : "Sync with tracker"}
             {(jiraConnected || syncTool) && <span style={{ marginLeft: "auto", width: 6, height: 6, borderRadius: "50%", background: jiraConnected ? "#36b37e" : syncTool?.color, flexShrink: 0 }} />}
           </button>
+        )}
+        {user && (
+          <div style={{ marginTop: 8, borderTop: "1px solid #ebecf0", paddingTop: 8, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <span style={{ fontSize: 11, color: "#97a0af", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{user.email}</span>
+            <button onClick={onSignOut} title="Sign out" style={{ display: "flex", alignItems: "center", gap: 5, padding: "5px 8px", background: "transparent", border: "1px solid #dfe1e6", borderRadius: 6, cursor: "pointer", color: "#97a0af", fontSize: 11, fontFamily: "'DM Sans',sans-serif", flexShrink: 0, transition: "all .15s" }}
+              onMouseEnter={e => { e.currentTarget.style.color = "#de350b"; e.currentTarget.style.borderColor = "rgba(222,53,11,.3)"; }}
+              onMouseLeave={e => { e.currentTarget.style.color = "#97a0af"; e.currentTarget.style.borderColor = "#dfe1e6"; }}>
+              <LogOut size={11} /> Sign out
+            </button>
+          </div>
         )}
       </div>
     </div>
