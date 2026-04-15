@@ -3294,8 +3294,8 @@ Be concise. Ask before creating if requirements are unclear.`;
       <div style={{ background: "#ffffff", border: "1px solid #dfe1e6", borderRadius: 12, overflow: "hidden", display: "flex", flexDirection: "column", height: 520 }}>
         <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 8px" }}>
           {msgs.map((m, i) => (
-            <div key={i} className={`ai-bubble ai-bubble-${m.role === "ai" ? "bot" : "user"}`}>
-              {m.text === "..." ? <div className="ai-typing"><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div> : m.text}
+            <div key={i} className={`ai-bubble ai-bubble-${m.role === "ai" ? "bot" : "user"}`} style={{ whiteSpace: m.role === "ai" ? "normal" : undefined }}>
+              {m.text === "..." ? <div className="ai-typing"><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div> : m.role === "ai" ? <div className="md-agenda" style={{ fontSize: 13 }}><ReactMarkdown>{m.text}</ReactMarkdown></div> : m.text}
             </div>
           ))}
           {pending && <ArtifactPreview pending={pending} />}
@@ -5084,8 +5084,8 @@ Be specific to this project. Reference what's already known. Challenge vague sta
       <div style={{ background: "#ffffff", border: "1px solid #dfe1e6", borderRadius: 12, overflow: "hidden", display: "flex", flexDirection: "column", height: 560 }}>
         <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 8px" }}>
           {msgs.map((m, i) => (
-            <div key={i} className={`ai-bubble ai-bubble-${m.role === "ai" ? "bot" : "user"}`}>
-              {m.text === "..." ? <div className="ai-typing"><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div> : m.text}
+            <div key={i} className={`ai-bubble ai-bubble-${m.role === "ai" ? "bot" : "user"}`} style={{ whiteSpace: m.role === "ai" ? "normal" : undefined }}>
+              {m.text === "..." ? <div className="ai-typing"><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div> : m.role === "ai" ? <div className="md-agenda" style={{ fontSize: 13 }}><ReactMarkdown>{m.text}</ReactMarkdown></div> : m.text}
             </div>
           ))}
           {pending && <ArtifactPreview pending={pending} />}
