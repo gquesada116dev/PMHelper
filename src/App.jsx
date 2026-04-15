@@ -6067,6 +6067,34 @@ function WireframePrototype({ projectContext, data = {}, onSave, defaultScreens 
     return () => URL.revokeObjectURL(url);
   }, [html]);
 
+  // Inject a reliable navigation system into whatever HTML Claude generates,
+  // so we don't depend on Claude getting the script/display setup exactly right.
+  const injectNav = (raw) => {
+    const script = `<script>
+(function(){
+  function showScreen(id){
+    document.querySelectorAll('.screen').forEach(function(s){ s.style.display='none'; });
+    var el=document.getElementById(id);
+    if(el) el.style.display='block';
+    var cur=document.getElementById('_cur');
+    if(cur) cur.textContent=id.replace('screen-','').replace(/-/g,' ');
+  }
+  window.showScreen=showScreen;
+  document.addEventListener('DOMContentLoaded',function(){
+    var screens=document.querySelectorAll('.screen');
+    screens.forEach(function(s,i){ s.style.display= i===0 ? 'block' : 'none'; });
+    var first=screens[0];
+    var cur=document.getElementById('_cur');
+    if(cur&&first) cur.textContent=first.id.replace('screen-','').replace(/-/g,' ');
+  });
+})();
+<\/script>`;
+    const cleaned = raw.replace(/^```html?\s*/i, "").replace(/\n?```\s*$/, "").trim();
+    if (cleaned.includes('</head>')) return cleaned.replace('</head>', script + '\n</head>');
+    if (cleaned.includes('<body>')) return cleaned.replace('<body>', '<body>\n' + script);
+    return script + cleaned;
+  };
+
   const buildPrompt = (extra = "") => {
     const list = screens.map((s, i) => `  ${i + 1}. "${s.name}"${s.description ? ` — ${s.description}` : ""}`).join("\n");
     return `Generate a complete, self-contained HTML lo-fi wireframe prototype.
@@ -6079,26 +6107,21 @@ ${extra ? `\nCHANGE REQUEST: ${extra}\n` : ""}
 SCREENS:
 ${list}
 
-NAVIGATION SYSTEM — follow exactly:
-1. Put this as the FIRST tag inside <head>:
-   <meta http-equiv="Content-Security-Policy" content="script-src 'unsafe-inline';">
-2. Put this script in <head> (before </head>):
-   <script>function showScreen(id){document.querySelectorAll('.screen').forEach(function(s){s.style.display='none';});document.getElementById(id).style.display='block';var el=document.getElementById('current-screen');if(el)el.textContent=id.replace('screen-','').replace(/-/g,' ');}</script>
-3. Each screen div: <div class="screen" id="screen-SLUG" style="display:none">
-4. FIRST screen only: style="display:block" (visible by default, no JS needed)
-5. Every button/link that navigates: onclick="showScreen('screen-SLUG')" — use <a> or <button> tags with this onclick
-6. Screen switcher bar at bottom: one button per screen, each with onclick="showScreen('screen-SLUG')"
-7. Top bar: show current screen name in <span id="current-screen">[first screen name]</span>
+STRUCTURE RULES:
+- Each screen: <div class="screen" id="screen-SLUG"> ... </div>  (slug = lowercase, hyphens)
+- Navigation buttons/links: onclick="showScreen('screen-SLUG')"  (showScreen is provided — just call it)
+- Top bar: include <span id="_cur"></span> to show current screen name (auto-filled)
+- Screen switcher at bottom: one button per screen with onclick="showScreen('screen-SLUG')"
+- Do NOT write any <script> tags or display CSS for screens — navigation is handled externally
 
-DESIGN REQUIREMENTS:
-- Single .html file — inline CSS + the JS above, zero external dependencies
-- Lo-fi wireframe: white bg, #e8e8e8 placeholder boxes, #222 text, clean borders
-- ${isMobile ? "max-width:390px centered, light border to simulate phone frame" : "Full-width desktop with appropriate top nav or sidebar"}
-- Placeholder images: <div style="background:#e8e8e8;border-radius:6px;width:100%;height:160px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:13px">Image placeholder</div>
-- Realistic placeholder text (not Lorem Ipsum) — match the product context
-- Every button must go somewhere — no dead ends
+DESIGN:
+- Lo-fi wireframe: white bg, #e8e8e8 placeholder boxes, #333 text, light borders
+- ${isMobile ? "max-width:390px centered with a thin border to suggest a phone" : "Full-width desktop with top nav or sidebar as appropriate"}
+- Placeholder images: <div style="background:#e8e8e8;border-radius:6px;width:100%;height:150px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:13px">Image</div>
+- Realistic placeholder text — match the product, not Lorem Ipsum
+- Every button navigates somewhere — no dead ends
 
-Return ONLY the complete HTML document. No markdown. No explanation. Begin with <!DOCTYPE html>.`;
+Return ONLY the HTML document. No markdown. No explanation. Begin with <!DOCTYPE html>.`;
   };
 
   const persist = (newHtml, newScreens) => {
@@ -6111,9 +6134,9 @@ Return ONLY the complete HTML document. No markdown. No explanation. Begin with 
     const reply = await askClaude([{ role: "user", content: buildPrompt() }],
       "You are a UX wireframe generator. Output ONLY a complete self-contained HTML document. No markdown. No explanation. Start with <!DOCTYPE html>.", 6000);
     setGenerating(false);
-    const clean = reply.replace(/^```html?\s*/i, "").replace(/\n?```\s*$/, "").trim();
-    setHtml(clean);
-    persist(clean);
+    const processed = injectNav(reply);
+    setHtml(processed);
+    persist(processed);
     setView("preview");
   };
 
@@ -6121,12 +6144,12 @@ Return ONLY the complete HTML document. No markdown. No explanation. Begin with 
     if (!iterPrompt.trim() || !html) return;
     setIterating(true);
     const reply = await askClaude(
-      [{ role: "user", content: `Current HTML wireframe:\n\n${html}\n\n---\nCHANGE REQUEST: ${iterPrompt}\n\nApply the changes and return the COMPLETE updated HTML. Keep the showScreen() JS navigation and the meta CSP tag. No markdown. No explanation.` }],
-      "You are a UX wireframe generator. Keep the showScreen() navigation JS and meta CSP tag intact. Return the complete updated HTML document. No markdown fences. No explanation.", 6000);
+      [{ role: "user", content: `Current HTML wireframe:\n\n${html}\n\n---\nCHANGE REQUEST: ${iterPrompt}\n\nApply the changes and return the COMPLETE updated HTML. Keep all class="screen" divs and onclick="showScreen(...)" calls. No markdown. No explanation.` }],
+      "You are a UX wireframe generator. Keep class='screen' divs and showScreen() onclick calls. Return the complete updated HTML. No markdown fences. No explanation.", 6000);
     setIterating(false);
-    const clean = reply.replace(/^```html?\s*/i, "").replace(/\n?```\s*$/, "").trim();
-    setHtml(clean);
-    persist(clean);
+    const processed = injectNav(reply);
+    setHtml(processed);
+    persist(processed);
     setIterPrompt("");
   };
 
