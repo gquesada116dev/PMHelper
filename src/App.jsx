@@ -786,6 +786,7 @@ export default function App() {
   const [section, setSection] = useState("overview");
   const [showNew, setShowNew] = useState(false);
   const [showSync, setShowSync] = useState(false);
+  const [showGraduation, setShowGraduation] = useState(false);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -853,7 +854,7 @@ export default function App() {
     "d-design": <DiscoveryDesign project={project} update={update} />,
     "d-team": <TeamEstimation project={project} update={update} />,
     "d-presentation": <DiscoveryPresentation project={project} update={update}
-      onGraduate={() => { update({ mode: "delivery" }); setSection("overview"); }} />,
+      onGraduate={() => setShowGraduation(true)} />,
   };
 
   const sections = isDiscovery ? discoverySections : deliverySections;
@@ -885,6 +886,19 @@ export default function App() {
       )}
       {showSync && project && (
         <SyncModal project={project} update={update} onClose={() => setShowSync(false)} />
+      )}
+      {showGraduation && project && (
+        <GraduationWizard
+          project={project}
+          onClose={() => setShowGraduation(false)}
+          onCreateDelivery={async (deliveryProject) => {
+            await supabase.from("projects").insert({ id: deliveryProject.id, data: deliveryProject });
+            setProjects(ps => [...ps, deliveryProject]);
+            setPid(deliveryProject.id);
+            setSection("overview");
+            setShowGraduation(false);
+          }}
+        />
       )}
     </div>
   );
@@ -3285,6 +3299,367 @@ Be concise. Ask before creating if requirements are unclear.`;
     </div>
   );
 }
+// ─── Graduation Wizard ───────────────────────────────────────────────────────
+function GraduationWizard({ project, onClose, onCreateDelivery }) {
+  const [step, setStep] = useState(0); // 0=review, 1=generating, 2=confirm
+  const [generated, setGenerated] = useState(null);
+  const [error, setError] = useState(null);
+  const [activeTab, setActiveTab] = useState("epics");
+
+  const sessionOutputs = (project.sessions || []).flatMap(s => {
+    const o = s.outputs || {};
+    return [
+      ...(o.risks || []).map(t => ({ type: "risk", text: t, session: s.title })),
+      ...(o.opportunities || []).map(t => ({ type: "opportunity", text: t, session: s.title })),
+      ...(o.assumptions || []).map(t => ({ type: "assumption", text: t, session: s.title })),
+      ...(o.keyDecisions || []).map(t => ({ type: "decision", text: t, session: s.title })),
+    ];
+  });
+
+  const allFeatures = (project.backbone || []).flatMap(stage =>
+    (stage.epics || []).flatMap(epic =>
+      (epic.features || []).map(f => ({ ...f, epicTitle: epic.title, stage: stage.stage, moscow: f.moscow }))
+    )
+  );
+  const mvpFeatures = allFeatures.filter(f => f.slice === "mvp");
+
+  const buildContext = () => {
+    const b = project.backbone || [];
+    const sessions = project.sessions || [];
+    return `
+PROJECT: ${project.name}
+Platform: ${project.platform} | Industry: ${project.industry}
+Description: ${project.about}
+
+ASSUMPTIONS: ${(project.assumptions || []).join("; ")}
+RISKS: ${(project.risks || []).map(r => typeof r === "string" ? r : r.text).join("; ")}
+OPPORTUNITIES: ${(project.opportunities || []).map(o => typeof o === "string" ? o : o.text).join("; ")}
+
+STORY MAP BACKBONE (Stages → Epics → Features):
+${b.map(stage => `  Stage: "${stage.stage}" — ${stage.description}
+${(stage.epics || []).map(epic => `    Epic: "${epic.title}" [${epic.moscow}]
+${(epic.features || []).map(f => `      - "${f.title}" [${f.moscow}] [${f.slice}]`).join("\n")}`).join("\n")}`).join("\n")}
+
+SESSION OUTPUTS:
+${sessions.map(s => `  Session: "${s.title}" (${s.date})
+    Participants: ${s.participants}
+    Notes: ${s.notes}
+    ${s.outputs ? `Risks: ${(s.outputs.risks || []).join("; ")}
+    Opportunities: ${(s.outputs.opportunities || []).join("; ")}
+    Decisions: ${(s.outputs.keyDecisions || []).join("; ")}
+    Assumptions: ${(s.outputs.assumptions || []).join("; ")}` : ""}`).join("\n")}
+
+ARCHITECTURE: ${project.architectureNotes || "Not documented"}
+
+NFRs:
+${(project.nfrs || []).map(n => `  [${n.priority}] ${n.category}: ${n.requirement}`).join("\n")}
+
+DESIGN PRIORITIES:
+${(project.designPriorities || []).map(d => `  - ${d.flow}: ${d.reason}`).join("\n")}
+
+INTEGRATIONS:
+${(project.integrations || []).map(i => `  - ${i.system} (${i.direction}): ${i.notes}`).join("\n")}
+
+ARCHITECTURE DECISIONS:
+${(project.adrs || []).map(a => `  - ${a.title}: ${a.decision}`).join("\n")}
+
+FLOWS: ${(project.flows || []).join(" | ")}
+`.trim();
+  };
+
+  const generate = async () => {
+    setStep(1);
+    setError(null);
+    const context = buildContext();
+    const prompt = `You are a senior PM converting a Discovery project into a structured Delivery project.
+
+Here is all the discovery data:
+${context}
+
+Generate a complete delivery project scaffold. Return ONLY a valid JSON object with this exact structure:
+{
+  "epics": [{ "id": "e1", "title": "...", "description": "...", "stories": 0 }],
+  "stories": [{ "id": "s1", "epicId": "e1", "title": "[FE/BE/FS/Mobile] EpicName | Short title", "description": "As a \\"role\\" I want to \\"action\\" so that \\"outcome\\"", "ac": "GIVEN | context\\nWHEN | action\\nTHEN | expected outcome\\nAND | optional", "aiPts": 3, "teamPts": null, "design": "", "oos": "", "deps": "", "blockers": "" }],
+  "personas": [{ "id": "p1", "role": "Job Title", "description": "Who they are and their context", "goals": "goal1, goal2", "painPoints": "pain1, pain2", "behaviors": "How they work" }],
+  "stakeholders": [{ "id": "sh1", "name": "Name if known or role title", "role": "Title", "influence": "High|Medium|Low", "decision": "Data-based|Gut-based|Consensus-driven", "notes": "Key preferences from sessions" }],
+  "designTasks": [{ "id": "d1", "epicId": "e1", "title": "[Design] EpicName | Screen/Flow", "desc": "What to design", "objective": "Goal", "scenarios": "Screen sizes and states", "deliverables": "Figma frames, annotations", "links": "" }],
+  "aiRules": ["Rule derived from architecture decisions or session outputs"],
+  "assumptions": ["assumption1"],
+  "risks": ["risk1"]
+}
+
+Rules:
+- Create epics directly from the story map backbone (one epic per backbone epic)
+- Create 2-4 stories per epic, focused on MVP features (slice=mvp first, then should-haves)
+- Each story title must start with [FE], [BE], [FS], or [Mobile] based on platform (${project.platform})
+- Personas must reflect real users discovered in sessions
+- Stakeholders must reflect participants mentioned in sessions
+- Design tasks for each epic that has user-facing flows
+- aiRules from architecture decisions and session outputs
+- Return ONLY the JSON object, no markdown, no explanation`;
+
+    const result = await askClaude([{ role: "user", content: prompt }],
+      "You are a senior PM. Return only valid JSON. No markdown fences, no explanation.", 4000);
+
+    let parsed = null;
+    try { parsed = JSON.parse(result.trim()); } catch {}
+    if (!parsed) { const m = result.match(/\{[\s\S]*\}/); if (m) try { parsed = JSON.parse(m[0]); } catch {} }
+
+    if (!parsed) { setError("Claude couldn't parse the discovery data. Try again."); setStep(0); return; }
+
+    // Assign real UIDs and update epic story counts
+    const epicMap = {};
+    parsed.epics = (parsed.epics || []).map(e => { const id = uid(); epicMap[e.id] = id; return { ...e, id, stories: 0 }; });
+    parsed.stories = (parsed.stories || []).map(s => {
+      const epicId = epicMap[s.epicId] || parsed.epics[0]?.id || "";
+      return { ...s, id: uid(), epicId, teamPts: null };
+    });
+    parsed.epics = parsed.epics.map(e => ({ ...e, stories: parsed.stories.filter(s => s.epicId === e.id).length }));
+    parsed.personas = (parsed.personas || []).map(p => ({ ...p, id: uid() }));
+    parsed.stakeholders = (parsed.stakeholders || []).map(s => ({ ...s, id: uid() }));
+    parsed.designTasks = (parsed.designTasks || []).map((d, i) => {
+      const epicId = epicMap[d.epicId] || parsed.epics[i % parsed.epics.length]?.id || "";
+      return { ...d, id: uid(), epicId };
+    });
+
+    setGenerated(parsed);
+    setStep(2);
+  };
+
+  const confirm = () => {
+    const risks = (project.risks || []).map(r => typeof r === "string" ? r : r.text);
+    const deliveryProject = {
+      id: uid(),
+      name: project.name,
+      platform: project.platform,
+      type: "Greenfield",
+      industry: project.industry,
+      about: project.about,
+      assumptions: generated.assumptions || project.assumptions || [],
+      risks: generated.risks || risks,
+      stakeholders: generated.stakeholders || [],
+      personas: generated.personas || [],
+      epics: generated.epics || [],
+      stories: generated.stories || [],
+      bugs: [],
+      design: generated.designTasks || [],
+      team: [],
+      sprints: [],
+      vacations: [],
+      customHolidays: [],
+      velocity: 40,
+      teamSize: (generated.stakeholders || []).length,
+      aiRules: generated.aiRules || [],
+      velocityHistory: [],
+      jira: null,
+      syncUrl: "",
+      discoveryId: project.id,
+    };
+    onCreateDelivery(deliveryProject);
+  };
+
+  const tabs = [
+    { id: "epics", label: "Epics", count: generated?.epics?.length },
+    { id: "stories", label: "Stories", count: generated?.stories?.length },
+    { id: "personas", label: "Personas", count: generated?.personas?.length },
+    { id: "stakeholders", label: "Stakeholders", count: generated?.stakeholders?.length },
+    { id: "design", label: "Design Tasks", count: generated?.designTasks?.length },
+    { id: "rules", label: "AI Rules", count: generated?.aiRules?.length },
+  ];
+
+  return (
+    <div className="modal-ov" onClick={e => e.target === e.currentTarget && onClose()}>
+      <div className="modal modal-wide" style={{ maxWidth: "860px", width: "94vw" }}>
+        <div className="modal-hd">
+          <h3 style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            <Rocket size={16} color="#0052cc" />
+            {step === 0 ? "Ready to graduate to Delivery?" : step === 1 ? "Generating delivery project…" : "Review & confirm"}
+          </h3>
+          <button className="icon-btn" onClick={onClose}><X size={16} /></button>
+        </div>
+
+        <div className="modal-bd" style={{ padding: "24px" }}>
+          {/* Step 0 — Discovery review */}
+          {step === 0 && (
+            <div>
+              <p style={{ fontSize: 13, color: "#6b778c", lineHeight: 1.65, marginBottom: 20 }}>
+                Claude will read everything from this discovery — sessions, story map, architecture, NFRs, flows, and decisions — and generate a fully pre-filled Delivery project. The Discovery project stays untouched.
+              </p>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 20 }}>
+                {[
+                  { label: "Sessions logged", value: (project.sessions || []).length, color: "#0052cc" },
+                  { label: "Backbone stages", value: (project.backbone || []).length, color: "#5b21b6" },
+                  { label: "MVP features", value: mvpFeatures.length, color: "#036b52" },
+                  { label: "Session outputs", value: sessionOutputs.length, color: "#7a6000" },
+                  { label: "NFRs documented", value: (project.nfrs || []).length, color: "#c9372c" },
+                  { label: "Integrations mapped", value: (project.integrations || []).length, color: "#1868db" },
+                ].map(({ label, value, color }) => (
+                  <div key={label} style={{ background: "#f4f5f7", border: "1px solid #dfe1e6", borderRadius: 8, padding: "12px 16px", display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <span style={{ fontSize: 12, color: "#6b778c" }}>{label}</span>
+                    <span style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 22, color }}>{value}</span>
+                  </div>
+                ))}
+              </div>
+
+              <div style={{ background: "#fff8e1", border: "1px solid #f5c518", borderRadius: 8, padding: "14px 16px", marginBottom: 20 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#7a6000", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 8 }}>What Claude will generate</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                  {["Epics from backbone", "Stories with AC", "Personas from sessions", "Stakeholders from sessions", "Design tasks per flow", "AI rules from architecture"].map(item => (
+                    <span key={item} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#172b4d", background: "white", border: "1px solid #f5c518", borderRadius: 20, padding: "3px 10px" }}>
+                      <CheckCircle2 size={11} color="#36b37e" /> {item}
+                    </span>
+                  ))}
+                </div>
+              </div>
+
+              {(project.backbone || []).length === 0 && (
+                <div style={{ background: "#fff3f3", border: "1px solid #ff8f73", borderRadius: 8, padding: "12px 16px", marginBottom: 20, fontSize: 13, color: "#ae2a19" }}>
+                  <AlertCircle size={13} style={{ display: "inline", marginRight: 6 }} />
+                  No story map backbone found. Claude will use sessions and project info to generate epics, but adding backbone stages first will produce much better results.
+                </div>
+              )}
+
+              <div style={{ fontFamily: "'DM Mono',monospace", fontSize: 10, color: "#97a0af", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 8 }}>Story map preview</div>
+              <div style={{ background: "#f4f5f7", border: "1px solid #dfe1e6", borderRadius: 8, padding: 14, maxHeight: 160, overflowY: "auto" }}>
+                {(project.backbone || []).length === 0 ? (
+                  <div style={{ fontSize: 12, color: "#97a0af", fontStyle: "italic" }}>No backbone stages yet</div>
+                ) : (project.backbone || []).map(stage => (
+                  <div key={stage.id} style={{ marginBottom: 10 }}>
+                    <div style={{ fontSize: 11, fontWeight: 700, color: "#0052cc", marginBottom: 4, fontFamily: "'DM Mono',monospace" }}>{stage.stage}</div>
+                    {(stage.epics || []).map(epic => (
+                      <div key={epic.id} style={{ marginLeft: 12, marginBottom: 3 }}>
+                        <span style={{ fontSize: 12, color: "#172b4d", fontWeight: 500 }}>{epic.title}</span>
+                        <span style={{ fontSize: 11, color: "#97a0af", marginLeft: 6 }}>{(epic.features || []).length} features · {(epic.features || []).filter(f => f.slice === "mvp").length} MVP</span>
+                      </div>
+                    ))}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Step 1 — Generating */}
+          {step === 1 && (
+            <div style={{ textAlign: "center", padding: "48px 24px" }}>
+              <div style={{ width: 48, height: 48, background: "#e6f0ff", borderRadius: 12, display: "flex", alignItems: "center", justifyContent: "center", margin: "0 auto 16px" }}>
+                <Loader size={22} color="#0052cc" style={{ animation: "spin 1s linear infinite" }} />
+              </div>
+              <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 16, color: "#172b4d", marginBottom: 8 }}>Building your Delivery project</div>
+              <div style={{ fontSize: 13, color: "#6b778c", maxWidth: 380, margin: "0 auto", lineHeight: 1.6 }}>
+                Claude is reading all your discovery data and generating epics, stories, personas, stakeholders, design tasks, and AI rules. This takes about 15–30 seconds.
+              </div>
+              <style>{`@keyframes spin { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }`}</style>
+            </div>
+          )}
+
+          {/* Step 2 — Review generated */}
+          {step === 2 && generated && (
+            <div>
+              <div style={{ background: "#e3fcef", border: "1px solid #abe2c7", borderRadius: 8, padding: "12px 16px", marginBottom: 20, display: "flex", alignItems: "center", gap: 8 }}>
+                <CheckCircle2 size={16} color="#006644" />
+                <span style={{ fontSize: 13, color: "#006644", fontWeight: 500 }}>
+                  Generated {generated.epics?.length} epics, {generated.stories?.length} stories, {generated.personas?.length} personas, {generated.stakeholders?.length} stakeholders, {generated.designTasks?.length} design tasks
+                </span>
+              </div>
+
+              {/* Tabs */}
+              <div style={{ display: "flex", gap: 4, borderBottom: "1px solid #dfe1e6", marginBottom: 16 }}>
+                {tabs.map(t => (
+                  <button key={t.id} onClick={() => setActiveTab(t.id)} style={{
+                    background: "none", border: "none", cursor: "pointer", padding: "8px 14px",
+                    fontSize: 12, fontWeight: activeTab === t.id ? 600 : 400,
+                    color: activeTab === t.id ? "#0052cc" : "#6b778c",
+                    borderBottom: activeTab === t.id ? "2px solid #0052cc" : "2px solid transparent",
+                    fontFamily: "'DM Sans',sans-serif",
+                  }}>
+                    {t.label} <span style={{ background: "#dfe1e6", borderRadius: 10, padding: "1px 6px", fontSize: 10, marginLeft: 4 }}>{t.count}</span>
+                  </button>
+                ))}
+              </div>
+
+              <div style={{ maxHeight: 340, overflowY: "auto" }}>
+                {activeTab === "epics" && (generated.epics || []).map(e => (
+                  <div key={e.id} className="card-flat" style={{ marginBottom: 8 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: "#172b4d", marginBottom: 4 }}>{e.title}</div>
+                    <div style={{ fontSize: 12, color: "#6b778c" }}>{e.description}</div>
+                    <div style={{ fontSize: 11, color: "#97a0af", marginTop: 4 }}>{e.stories} stories planned</div>
+                  </div>
+                ))}
+
+                {activeTab === "stories" && (generated.stories || []).map(s => (
+                  <div key={s.id} className="card-flat" style={{ marginBottom: 8 }}>
+                    <div style={{ fontWeight: 600, fontSize: 12, color: "#172b4d", marginBottom: 4 }}>{s.title}</div>
+                    {s.description && <div style={{ fontSize: 11, color: "#6b778c", fontStyle: "italic", marginBottom: 6 }}>{s.description}</div>}
+                    {s.ac && <div style={{ fontSize: 11, color: "#97a0af", fontFamily: "'DM Mono',monospace", whiteSpace: "pre-line", background: "#f4f5f7", borderRadius: 5, padding: "6px 8px" }}>{s.ac}</div>}
+                    <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
+                      {s.aiPts && <span style={{ fontSize: 10, background: "#e6f0ff", color: "#0052cc", borderRadius: 4, padding: "1px 6px", fontFamily: "'DM Mono',monospace" }}>AI: {s.aiPts}pts</span>}
+                    </div>
+                  </div>
+                ))}
+
+                {activeTab === "personas" && (generated.personas || []).map(p => (
+                  <div key={p.id} className="card-flat" style={{ marginBottom: 8 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: "#172b4d", marginBottom: 4 }}>{p.role}</div>
+                    <div style={{ fontSize: 12, color: "#6b778c", marginBottom: 6 }}>{p.description}</div>
+                    <div style={{ fontSize: 11, color: "#5b21b6" }}>Goals: {p.goals}</div>
+                    <div style={{ fontSize: 11, color: "#c9372c" }}>Pain points: {p.painPoints}</div>
+                  </div>
+                ))}
+
+                {activeTab === "stakeholders" && (generated.stakeholders || []).map(s => (
+                  <div key={s.id} className="card-flat" style={{ marginBottom: 8, display: "flex", gap: 12, alignItems: "flex-start" }}>
+                    <div style={{ width: 32, height: 32, borderRadius: "50%", background: "#e6f0ff", display: "flex", alignItems: "center", justifyContent: "center", fontWeight: 700, fontSize: 12, color: "#0052cc", flexShrink: 0 }}>
+                      {s.name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase()}
+                    </div>
+                    <div>
+                      <div style={{ fontWeight: 600, fontSize: 13, color: "#172b4d" }}>{s.name} <span style={{ fontWeight: 400, fontSize: 11, color: "#97a0af" }}>· {s.role}</span></div>
+                      <div style={{ fontSize: 11, color: "#6b778c", marginTop: 2 }}>Influence: {s.influence} · {s.decision}</div>
+                      {s.notes && <div style={{ fontSize: 11, color: "#97a0af", marginTop: 4 }}>{s.notes}</div>}
+                    </div>
+                  </div>
+                ))}
+
+                {activeTab === "design" && (generated.designTasks || []).map(d => (
+                  <div key={d.id} className="card-flat" style={{ marginBottom: 8 }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: "#172b4d", marginBottom: 4 }}>{d.title}</div>
+                    <div style={{ fontSize: 12, color: "#6b778c", marginBottom: 4 }}>{d.desc}</div>
+                    <div style={{ fontSize: 11, color: "#97a0af" }}>Deliverables: {d.deliverables}</div>
+                  </div>
+                ))}
+
+                {activeTab === "rules" && (
+                  <div>
+                    {(generated.aiRules || []).map((r, i) => (
+                      <div key={i} className="card-flat" style={{ marginBottom: 8, display: "flex", gap: 8, alignItems: "flex-start" }}>
+                        <Zap size={12} color="#e8c547" style={{ flexShrink: 0, marginTop: 2 }} />
+                        <span style={{ fontSize: 12, color: "#172b4d" }}>{r}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {error && <div style={{ marginTop: 12, fontSize: 12, color: "#c9372c" }}>{error}</div>}
+            </div>
+          )}
+        </div>
+
+        <div className="modal-ft">
+          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          {step === 0 && <button className="btn btn-primary" onClick={generate}><Sparkles size={13} /> Generate with AI</button>}
+          {step === 2 && (
+            <>
+              <button className="btn btn-ghost" onClick={() => { setStep(0); setGenerated(null); }}>Regenerate</button>
+              <button className="btn btn-primary" onClick={confirm}><Rocket size={13} /> Create Delivery Project</button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── New Project Modal ────────────────────────────────────────────────────────
 function NewProjectModal({ onClose, onCreate }) {
   const [mode, setMode] = useState(null); // null = choose, "delivery", "discovery"
