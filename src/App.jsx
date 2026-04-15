@@ -2073,18 +2073,17 @@ ${project.aiRules.length ? "Project rules: " + project.aiRules.join("; ") : ""}`
 - expected: the specific observable outcome
 Cover every AC scenario plus relevant edge cases and boundary conditions.`;
 
-  const generateTestCases = async () => {
-    if (!form.title || !form.ac) return;
-    setGeneratingTCs(true);
-    const existing = (form.testCases || []).length;
+  const generateTestCasesFor = async (storyData) => {
+    if (!storyData.title) return [];
+    const existing = (storyData.testCases || []).length;
     const reply = await askClaude([{
       role: "user",
       content: `Generate test cases for this user story.
 
-STORY: ${form.title}
-DESCRIPTION: ${form.description}
+STORY: ${storyData.title}
+DESCRIPTION: ${storyData.description || ""}
 ACCEPTANCE CRITERIA:
-${form.ac}
+${storyData.ac || "(no AC provided — infer from the story title and description)"}
 
 ${TC_STANDARD}
 
@@ -2100,23 +2099,32 @@ Return JSON array only:
   }
 ]
 
-Generate ${existing > 0 ? "additional" : "comprehensive"} test cases covering all AC scenarios. Return only the JSON array.`
+Generate ${existing > 0 ? "additional" : "comprehensive"} test cases covering all scenarios. Return only the JSON array.`
     }], "You are a senior QA engineer. Generate structured test cases. Return only a valid JSON array.", 2000);
+    const parsed = parseJSON(reply);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.map((tc, i) => ({
+      id: uid(),
+      code: tc.code || `TC-${String(existing + i + 1).padStart(3, "0")}`,
+      title: tc.title || "",
+      type: tc.type || "positive",
+      preconditions: tc.preconditions || "",
+      steps: tc.steps || "",
+      expected: tc.expected || "",
+      status: "not-run",
+    }));
+  };
+
+  const generateTestCases = async () => {
+    if (!form.title) return;
+    setGeneratingTCs(true);
+    const newCases = await generateTestCasesFor(form);
     setGeneratingTCs(false);
-    const parsed = parseJSON(reply) || parseJSON(reply.replace(/^```(?:json)?\s*/i, "").replace(/\n?```\s*$/, "").trim());
-    if (Array.isArray(parsed)) {
-      const newCases = parsed.map((tc, i) => ({
-        id: uid(),
-        code: tc.code || `TC-${String(existing + i + 1).padStart(3, "0")}`,
-        title: tc.title || "",
-        type: tc.type || "positive",
-        preconditions: tc.preconditions || "",
-        steps: tc.steps || "",
-        expected: tc.expected || "",
-        status: "not-run",
-      }));
-      setForm(f => ({ ...f, testCases: [...(f.testCases || []), ...newCases] }));
-    }
+    if (newCases.length === 0) return;
+    const merged = [...(form.testCases || []), ...newCases];
+    setForm(f => ({ ...f, testCases: merged }));
+    // also persist immediately so closing without Save doesn't lose them
+    if (form.id) update({ stories: project.stories.map(s => s.id === form.id ? { ...s, testCases: merged } : s) });
   };
 
   const improveStory = async (s) => {
@@ -2130,6 +2138,7 @@ Generate ${existing > 0 ? "additional" : "comprehensive"} test cases covering al
     const jsonMatch = result.match(/```(?:json)?\s*([\s\S]*?)```/);
     const parsed = jsonMatch ? parseJSON(jsonMatch[1]) : parseJSON(result);
     if (parsed) update({ stories: project.stories.map(x => x.id === s.id ? { ...x, ...parsed } : x) });
+    return parsed || null;
   };
 
   const copyStory = (s) => {
@@ -2258,34 +2267,20 @@ Generate ${existing > 0 ? "additional" : "comprehensive"} test cases covering al
               className="btn btn-ai"
               style={{ width: "100%", marginBottom: 16, justifyContent: "center", padding: "10px 0", fontSize: 13 }}
               onClick={async () => {
-                const s = project.stories.find(x => x.id === form.id);
-                if (!s) return;
-                await improveStory(s);
-                const updated = project.stories.find(x => x.id === form.id);
-                if (updated) {
-                  setForm(updated);
-                  // also generate test cases using the updated story
-                  setGeneratingTCs(true);
-                  const existing = (updated.testCases || []).length;
-                  const reply = await askClaude([{
-                    role: "user",
-                    content: `Generate test cases for this user story.\n\nSTORY: ${updated.title}\nDESCRIPTION: ${updated.description}\nACCEPTANCE CRITERIA:\n${updated.ac}\n\n${TC_STANDARD}\n\nReturn JSON array only:\n[\n  {\n    "code": "TC-001",\n    "title": "...",\n    "type": "positive",\n    "preconditions": "...",\n    "steps": "1. ...\\n2. ...\\n3. ...",\n    "expected": "..."\n  }\n]\n\nGenerate ${existing > 0 ? "additional" : "comprehensive"} test cases covering all AC scenarios. Return only the JSON array.`
-                  }], "You are a senior QA engineer. Generate structured test cases. Return only a valid JSON array.", 2000);
-                  setGeneratingTCs(false);
-                  const parsed = parseJSON(reply) || parseJSON(reply.replace(/^```(?:json)?\s*/i, "").replace(/\n?```\s*$/, "").trim());
-                  if (Array.isArray(parsed)) {
-                    const newCases = parsed.map((tc, i) => ({
-                      id: uid(),
-                      code: tc.code || `TC-${String(existing + i + 1).padStart(3, "0")}`,
-                      title: tc.title || "",
-                      type: tc.type || "positive",
-                      preconditions: tc.preconditions || "",
-                      steps: tc.steps || "",
-                      expected: tc.expected || "",
-                      status: "not-run",
-                    }));
-                    setForm(f => ({ ...f, testCases: [...(f.testCases || []), ...newCases] }));
-                  }
+                const s = project.stories.find(x => x.id === form.id) || form;
+                const improvements = await improveStory(s);
+                // Build the improved story from current form + improvements returned directly
+                const improvedStory = improvements ? { ...form, ...improvements } : { ...form };
+                setForm(improvedStory);
+                // Generate test cases from the improved story data
+                setGeneratingTCs(true);
+                const newCases = await generateTestCasesFor(improvedStory);
+                setGeneratingTCs(false);
+                if (newCases.length > 0) {
+                  const merged = [...(improvedStory.testCases || []), ...newCases];
+                  const finalStory = { ...improvedStory, testCases: merged };
+                  setForm(finalStory);
+                  update({ stories: project.stories.map(s2 => s2.id === form.id ? finalStory : s2) });
                 }
               }}
               disabled={improving === form.id || generatingTCs}
@@ -2331,7 +2326,7 @@ Generate ${existing > 0 ? "additional" : "comprehensive"} test cases covering al
               <div style={{ fontSize: 13, fontWeight: 700, color: "#172b4d" }}>Test Cases <span style={{ fontWeight: 400, color: "#97a0af" }}>({(form.testCases || []).length})</span></div>
               <div style={{ fontSize: 11, color: "#97a0af", marginTop: 2 }}>TC-NNN · Positive / Negative / Edge · Pre-conditions → Steps → Expected</div>
             </div>
-            <button className="btn btn-ai btn-sm" onClick={generateTestCases} disabled={generatingTCs || !form.ac}>
+            <button className="btn btn-ai btn-sm" onClick={generateTestCases} disabled={generatingTCs || !form.title}>
               {generatingTCs ? "Generating…" : <><Sparkles size={12} /> Generate TCs</>}
             </button>
           </div>
