@@ -4317,9 +4317,39 @@ function DiscoveryOverview({ project, update, setSection }) {
   const phases = ["discovery", "story-mapping", "planning", "complete"];
   const phaseLabels = { discovery: "Discovery", "story-mapping": "Story Mapping", planning: "Planning", complete: "Complete" };
   const cur = phases.indexOf(project.discoveryPhase || "discovery");
+  const [editingAbout, setEditingAbout] = useState(false);
+  const [aboutForm, setAboutForm] = useState({});
+
+  const openAboutEdit = () => {
+    setAboutForm({ name: project.name, about: project.about || "", industry: project.industry || "", clientType: project.clientType || "startup", platform: project.platform || "" });
+    setEditingAbout(true);
+  };
+  const saveAbout = () => {
+    update({ name: aboutForm.name, about: aboutForm.about, industry: aboutForm.industry, clientType: aboutForm.clientType, platform: aboutForm.platform });
+    setEditingAbout(false);
+  };
 
   return (
     <div>
+      {editingAbout && (
+        <Modal title="Edit Project Details" onClose={() => setEditingAbout(false)}
+          footer={<><button className="btn btn-ghost" onClick={() => setEditingAbout(false)}>Cancel</button><button className="btn btn-primary" onClick={saveAbout}>Save</button></>}>
+          <div className="field"><label>Project Name</label><input value={aboutForm.name} onChange={e => setAboutForm(f => ({ ...f, name: e.target.value }))} /></div>
+          <div className="field"><label>About</label><textarea value={aboutForm.about} onChange={e => setAboutForm(f => ({ ...f, about: e.target.value }))} rows={5} /></div>
+          <div className="row">
+            <div className="field"><label>Industry</label><input value={aboutForm.industry} onChange={e => setAboutForm(f => ({ ...f, industry: e.target.value }))} placeholder="e.g. Fintech, Healthcare" /></div>
+            <div className="field"><label>Client Type</label>
+              <select value={aboutForm.clientType} onChange={e => setAboutForm(f => ({ ...f, clientType: e.target.value }))}>
+                <option value="startup">Startup</option>
+                <option value="enterprise">Enterprise</option>
+                <option value="scaleup">Scale-up</option>
+                <option value="agency">Agency</option>
+              </select>
+            </div>
+          </div>
+          <div className="field"><label>Platform</label><input value={aboutForm.platform} onChange={e => setAboutForm(f => ({ ...f, platform: e.target.value }))} placeholder="e.g. Web, iOS, Android, Cross-platform" /></div>
+        </Modal>
+      )}
       <div className="sec-head">
         <div>
           <div className="sec-title">{project.name}</div>
@@ -4328,6 +4358,7 @@ function DiscoveryOverview({ project, update, setSection }) {
         <div className="sec-actions">
           <PhaseTag phase={project.discoveryPhase || "discovery"} />
           <span className="tag tag-muted">{project.clientType}</span>
+          <button className="btn btn-ghost btn-sm" onClick={openAboutEdit}><Edit2 size={12} /> Edit Details</button>
         </div>
       </div>
 
