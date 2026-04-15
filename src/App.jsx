@@ -6057,18 +6057,11 @@ function WireframePrototype({ projectContext, data = {}, onSave, defaultScreens 
 
   const isMobile = /(mobile|app|ios|android)/i.test(projectContext.platform || "");
 
-  // Use a Blob URL so inline scripts in the prototype aren't blocked by CSP
-  const [blobUrl, setBlobUrl] = useState(null);
-  useEffect(() => {
-    if (!html) { setBlobUrl(null); return; }
-    const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
-    setBlobUrl(url);
-    return () => URL.revokeObjectURL(url);
-  }, [html]);
 
   const buildPrompt = (extra = "") => {
     const list = screens.map((s, i) => `  ${i + 1}. "${s.name}"${s.description ? ` — ${s.description}` : ""}`).join("\n");
-    return `Generate a complete, self-contained HTML lo-fi wireframe prototype.
+    const firstSlug = screens[0] ? screens[0].name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") : "home";
+    return `Generate a complete, self-contained HTML lo-fi wireframe prototype. CRITICAL: use ONLY CSS for navigation — absolutely NO JavaScript of any kind.
 
 PROJECT: ${projectContext.name}
 About: ${projectContext.about || ""}
@@ -6078,17 +6071,23 @@ ${extra ? `\nCHANGE REQUEST: ${extra}\n` : ""}
 SCREENS:
 ${list}
 
-REQUIREMENTS:
-- Single .html file — inline CSS + JS only, zero external dependencies
-- Lo-fi wireframe aesthetic: gray palette (#f5f5f5 bg, #e0e0e0 placeholder boxes, #333 text)
-- ${isMobile ? "Center content at max-width:390px with a phone-style chrome border" : "Full-width desktop with proper top nav or sidebar as appropriate"}
-- Each screen: <div class="screen" id="screen-SLUG"> — only one visible at a time
-- Every clickable element (buttons, links, nav items) MUST call showScreen('screen-SLUG') — nothing should be a dead end
-- Fixed breadcrumb bar at top showing current screen name + back button
-- Placeholder images: <div style="background:#ddd;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#999;font-size:12px">Image</div>
-- Realistic placeholder text (not Lorem Ipsum) — make it feel like the real product
-- Include a simple screen switcher footer so testers can jump to any screen
-- First visible screen = most logical entry point (login or home)
+NAVIGATION SYSTEM (CSS :target — no JS):
+- Each screen: <div class="screen" id="screen-SLUG">
+- All screens hidden by default: .screen { display: none }
+- First screen visible: #screen-${firstSlug} { display: block }
+- Targeted screen visible: .screen:target { display: block }
+- Hide first when another is targeted: :has(.screen:target:not(#screen-${firstSlug})) #screen-${firstSlug} { display: none }
+- All navigation links: <a href="#screen-SLUG"> — never use onclick or JS
+
+DESIGN REQUIREMENTS:
+- Single .html file — inline CSS only, zero JavaScript, zero external dependencies
+- Lo-fi wireframe aesthetic: white bg, #e0e0e0 placeholder boxes, #333 text, simple borders
+- ${isMobile ? "Center content at max-width:390px with a light border to simulate a phone" : "Full-width desktop layout with appropriate nav/sidebar"}
+- Sticky top bar on every screen: project name left, current screen name center (use CSS to show/hide per screen), back link right
+- Placeholder images: <div style="background:#e0e0e0;border-radius:6px;width:100%;height:160px;display:flex;align-items:center;justify-content:center;color:#999;font-size:13px">Image</div>
+- Realistic placeholder text (not Lorem Ipsum) — match the product context
+- Fixed screen-switcher bar at the very bottom with an <a href="#screen-SLUG"> link for every screen
+- Make every button and link navigate somewhere meaningful using href="#screen-SLUG"
 
 Return ONLY the complete HTML document. No markdown fences. No explanation. Begin with <!DOCTYPE html>.`;
   };
@@ -6113,8 +6112,8 @@ Return ONLY the complete HTML document. No markdown fences. No explanation. Begi
     if (!iterPrompt.trim() || !html) return;
     setIterating(true);
     const reply = await askClaude(
-      [{ role: "user", content: `Current HTML wireframe:\n\n${html}\n\n---\nCHANGE REQUEST: ${iterPrompt}\n\nApply the changes and return the COMPLETE updated HTML. No markdown. No explanation.` }],
-      "You are a UX wireframe generator. Apply the requested changes and return the complete updated HTML document. No markdown fences. No explanation.", 6000);
+      [{ role: "user", content: `Current HTML wireframe:\n\n${html}\n\n---\nCHANGE REQUEST: ${iterPrompt}\n\nApply the changes and return the COMPLETE updated HTML. Keep the CSS :target navigation system — no JavaScript. No markdown. No explanation.` }],
+      "You are a UX wireframe generator. Use only CSS :target for navigation — no JavaScript. Return the complete updated HTML document. No markdown fences. No explanation.", 6000);
     setIterating(false);
     const clean = reply.replace(/^```html?\s*/i, "").replace(/\n?```\s*$/, "").trim();
     setHtml(clean);
@@ -6239,7 +6238,7 @@ Return ONLY the complete HTML document. No markdown fences. No explanation. Begi
                 {projectContext.name} — Lo-fi Prototype
               </div>
             </div>
-            <iframe src={blobUrl} style={{ width: "100%", height: isMobile ? 780 : 640, border: "none", display: "block" }} title="Wireframe prototype" />
+            <iframe srcDoc={html} style={{ width: "100%", height: isMobile ? 780 : 640, border: "none", display: "block" }} title="Wireframe prototype" />
           </div>
 
           <div className="card" style={{ padding: 14 }}>
