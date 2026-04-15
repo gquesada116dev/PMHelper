@@ -1973,7 +1973,7 @@ function ACBlock({ ac }) {
 // ─── Stories ──────────────────────────────────────────────────────────────────
 function StoriesSection({ project, update }) {
   const [modal, setModal] = useState(null);
-  const blank = { title: "", epicId: project.epics[0]?.id || "", description: "", ac: "", aiPts: null, teamPts: null, design: "", oos: "", deps: "", blockers: "" };
+  const blank = { title: "", epicId: project.epics[0]?.id || "", description: "", ac: "", aiPts: null, teamPts: null, design: "", oos: "", deps: "", blockers: "", testCases: [] };
   const [form, setForm] = useState(blank);
   const [filterEpic, setFilterEpic] = useState("all");
 
@@ -2059,7 +2059,65 @@ ${project.aiRules.length ? "Project rules: " + project.aiRules.join("; ") : ""}`
 
   const [improving, setImproving] = useState(null);
   const [copied, setCopied] = useState(null);
+  const [generatingTCs, setGeneratingTCs] = useState(false);
+  const [tcExpanded, setTcExpanded] = useState(null);
+  const [editingTC, setEditingTC] = useState(null); // { idx, ...fields }
   const syncTool = detectTool(project.syncUrl);
+
+  const TC_STANDARD = `Standard: each test case must have:
+- code: TC-NNN (sequential within the story)
+- title: short scenario name (e.g. "Login with valid credentials")
+- type: "positive" | "negative" | "edge"
+- preconditions: what must be true before executing
+- steps: numbered list of exact actions
+- expected: the specific observable outcome
+Cover every AC scenario plus relevant edge cases and boundary conditions.`;
+
+  const generateTestCases = async () => {
+    if (!form.title || !form.ac) return;
+    setGeneratingTCs(true);
+    const existing = (form.testCases || []).length;
+    const reply = await askClaude([{
+      role: "user",
+      content: `Generate test cases for this user story.
+
+STORY: ${form.title}
+DESCRIPTION: ${form.description}
+ACCEPTANCE CRITERIA:
+${form.ac}
+
+${TC_STANDARD}
+
+Return JSON array only:
+[
+  {
+    "code": "TC-001",
+    "title": "...",
+    "type": "positive",
+    "preconditions": "...",
+    "steps": "1. ...\n2. ...\n3. ...",
+    "expected": "..."
+  }
+]
+
+Generate ${existing > 0 ? "additional" : "comprehensive"} test cases covering all AC scenarios. Return only the JSON array.`
+    }], "You are a senior QA engineer. Generate structured test cases. Return only a valid JSON array.", 2000);
+    setGeneratingTCs(false);
+    const parsed = parseJSON(reply) || parseJSON(reply.replace(/^```(?:json)?\s*/i, "").replace(/\n?```\s*$/, "").trim());
+    if (Array.isArray(parsed)) {
+      const newCases = parsed.map((tc, i) => ({
+        id: uid(),
+        code: tc.code || `TC-${String(existing + i + 1).padStart(3, "0")}`,
+        title: tc.title || "",
+        type: tc.type || "positive",
+        preconditions: tc.preconditions || "",
+        steps: tc.steps || "",
+        expected: tc.expected || "",
+        status: "not-run",
+      }));
+      setForm(f => ({ ...f, testCases: [...(f.testCases || []), ...newCases] }));
+    }
+  };
 
   const improveStory = async (s) => {
     setImproving(s.id);
@@ -2114,6 +2172,11 @@ ${project.aiRules.length ? "Project rules: " + project.aiRules.join("; ") : ""}`
                 : s.aiPts !== null
                   ? <span className="pts-chip pts-ai" style={{ flexShrink: 0 }}><Sparkles size={9} /> {s.aiPts}pt</span>
                   : null}
+              {(s.testCases?.length > 0) && (
+                <span style={{ fontSize: 10, color: "#00632b", background: "#e3fcef", padding: "1px 7px", borderRadius: 10, fontWeight: 600, flexShrink: 0 }}>
+                  {s.testCases.length} TC{s.testCases.length !== 1 ? "s" : ""}
+                </span>
+              )}
               <button className="btn btn-ai btn-xs" onClick={() => improveStory(s)} disabled={isImproving} style={{ flexShrink: 0 }}>
                 {isImproving ? <><div className="ai-dot" style={{ width: 5, height: 5 }} /><div className="ai-dot" style={{ width: 5, height: 5, animationDelay: ".2s" }} /></> : <><Sparkles size={10} /> Improve</>}
               </button>
@@ -2222,6 +2285,105 @@ ${project.aiRules.length ? "Project rules: " + project.aiRules.join("; ") : ""}`
             <div className="field"><label>Dependencies</label><input value={form.deps} onChange={e => setForm(f => ({ ...f, deps: e.target.value }))} /></div>
             <div className="field"><label>Blockers</label><input value={form.blockers} onChange={e => setForm(f => ({ ...f, blockers: e.target.value }))} /></div>
           </div>
+
+          <div className="divider" />
+
+          {/* ── Test Cases ── */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "#172b4d" }}>Test Cases <span style={{ fontWeight: 400, color: "#97a0af" }}>({(form.testCases || []).length})</span></div>
+              <div style={{ fontSize: 11, color: "#97a0af", marginTop: 2 }}>TC-NNN · Positive / Negative / Edge · Pre-conditions → Steps → Expected</div>
+            </div>
+            <button className="btn btn-ai btn-sm" onClick={generateTestCases} disabled={generatingTCs || !form.ac}>
+              {generatingTCs ? "Generating…" : <><Sparkles size={12} /> Generate TCs</>}
+            </button>
+          </div>
+
+          {(form.testCases || []).length === 0 && !generatingTCs && (
+            <div style={{ background: "#f8f9fa", border: "1px dashed #dfe1e6", borderRadius: 8, padding: "16px", textAlign: "center", color: "#97a0af", fontSize: 13, marginBottom: 4 }}>
+              No test cases yet. Add the AC first, then click <strong>Generate TCs</strong>.
+            </div>
+          )}
+
+          {(form.testCases || []).map((tc, idx) => {
+            const typeColor = tc.type === "positive" ? { color: "#00632b", bg: "#e3fcef" } : tc.type === "negative" ? { color: "#de350b", bg: "#ffebe6" } : { color: "#0052cc", bg: "#e6f0ff" };
+            const statusColor = tc.status === "pass" ? "#00632b" : tc.status === "fail" ? "#de350b" : "#97a0af";
+            const isExp = tcExpanded === idx;
+            const isEditingThis = editingTC?.idx === idx;
+
+            return (
+              <div key={tc.id} style={{ border: "1px solid #dfe1e6", borderRadius: 8, marginBottom: 6, overflow: "hidden" }}>
+                {/* Header row */}
+                <div style={{ display: "flex", alignItems: "center", gap: 8, padding: "9px 12px", cursor: "pointer", background: isExp ? "#f8f9fa" : "#fff" }}
+                  onClick={() => setTcExpanded(isExp ? null : idx)}>
+                  <span style={{ fontSize: 10, fontFamily: "'DM Mono',monospace", fontWeight: 700, color: "#97a0af", flexShrink: 0 }}>{tc.code}</span>
+                  <span style={{ fontSize: 11, fontWeight: 700, color: typeColor.color, background: typeColor.bg, padding: "1px 7px", borderRadius: 10, flexShrink: 0, textTransform: "capitalize" }}>{tc.type}</span>
+                  <span style={{ flex: 1, fontSize: 12, color: "#344563", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{tc.title}</span>
+                  <select value={tc.status} onClick={e => e.stopPropagation()}
+                    onChange={e => { e.stopPropagation(); setForm(f => ({ ...f, testCases: f.testCases.map((x, i) => i === idx ? { ...x, status: e.target.value } : x) })); }}
+                    style={{ fontSize: 11, padding: "2px 6px", border: "1px solid #dfe1e6", borderRadius: 4, color: statusColor, background: "#fff", cursor: "pointer" }}>
+                    <option value="not-run">Not Run</option>
+                    <option value="pass">Pass</option>
+                    <option value="fail">Fail</option>
+                  </select>
+                  <button className="icon-btn" onClick={e => { e.stopPropagation(); setEditingTC({ idx, ...tc }); setTcExpanded(idx); }} title="Edit"><Edit2 size={12} /></button>
+                  <button className="icon-btn" onClick={e => { e.stopPropagation(); setForm(f => ({ ...f, testCases: f.testCases.filter((_, i) => i !== idx) })); }} title="Delete"><Trash2 size={12} /></button>
+                  <ChevronDown size={13} style={{ color: "#97a0af", transform: isExp ? "rotate(180deg)" : "none", transition: "transform .15s", flexShrink: 0 }} />
+                </div>
+
+                {/* Expanded detail / edit */}
+                {isExp && (
+                  <div style={{ padding: "12px 14px", borderTop: "1px solid #f1f2f4", background: "#fafbfc" }}>
+                    {isEditingThis ? (
+                      <>
+                        <div className="row" style={{ marginBottom: 8 }}>
+                          <div className="field" style={{ flex: 2 }}>
+                            <label>Title</label>
+                            <input value={editingTC.title} onChange={e => setEditingTC(t => ({ ...t, title: e.target.value }))} />
+                          </div>
+                          <div className="field">
+                            <label>Type</label>
+                            <select value={editingTC.type} onChange={e => setEditingTC(t => ({ ...t, type: e.target.value }))}>
+                              <option value="positive">Positive</option>
+                              <option value="negative">Negative</option>
+                              <option value="edge">Edge Case</option>
+                            </select>
+                          </div>
+                        </div>
+                        <div className="field"><label>Pre-conditions</label><input value={editingTC.preconditions} onChange={e => setEditingTC(t => ({ ...t, preconditions: e.target.value }))} /></div>
+                        <div className="field"><label>Steps</label><textarea value={editingTC.steps} onChange={e => setEditingTC(t => ({ ...t, steps: e.target.value }))} rows={4} style={{ fontFamily: "'DM Mono',monospace", fontSize: 12 }} /></div>
+                        <div className="field"><label>Expected Result</label><textarea value={editingTC.expected} onChange={e => setEditingTC(t => ({ ...t, expected: e.target.value }))} rows={2} /></div>
+                        <div style={{ display: "flex", gap: 8 }}>
+                          <button className="btn btn-primary btn-sm" onClick={() => {
+                            const { idx: i, ...fields } = editingTC;
+                            setForm(f => ({ ...f, testCases: f.testCases.map((x, j) => j === i ? { ...x, ...fields } : x) }));
+                            setEditingTC(null);
+                          }}>Save</button>
+                          <button className="btn btn-ghost btn-sm" onClick={() => setEditingTC(null)}>Cancel</button>
+                        </div>
+                      </>
+                    ) : (
+                      <div style={{ fontSize: 12, color: "#505f79", lineHeight: 1.7 }}>
+                        {tc.preconditions && <div><strong>Pre-conditions:</strong> {tc.preconditions}</div>}
+                        {tc.steps && <div style={{ marginTop: 6 }}><strong>Steps:</strong><pre style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, margin: "4px 0 0", whiteSpace: "pre-wrap", color: "#344563" }}>{tc.steps}</pre></div>}
+                        {tc.expected && <div style={{ marginTop: 6 }}><strong>Expected:</strong> {tc.expected}</div>}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+
+          {/* Add TC manually */}
+          <button className="btn btn-ghost btn-sm" style={{ marginTop: 4 }} onClick={() => {
+            const nextNum = String((form.testCases || []).length + 1).padStart(3, "0");
+            const newTC = { id: uid(), code: `TC-${nextNum}`, title: "New test case", type: "positive", preconditions: "", steps: "", expected: "", status: "not-run" };
+            setForm(f => ({ ...f, testCases: [...(f.testCases || []), newTC] }));
+            const newIdx = (form.testCases || []).length;
+            setEditingTC({ idx: newIdx, ...newTC });
+            setTcExpanded(newIdx);
+          }}><Plus size={12} /> Add Test Case</button>
         </Modal>
       )}
     </div>
