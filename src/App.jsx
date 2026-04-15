@@ -4074,24 +4074,19 @@ function DiscoveryOverview({ project, update, setSection }) {
 
 // ─── Discovery Meeting Prep ────────────────────────────────────────────────────
 function DiscoveryMeetingPrep({ project, update }) {
-  const [loading, setLoading] = useState(false);
-  const [agenda, setAgenda] = useState(project.savedAgenda || null);
+  const [generating, setGenerating] = useState(false);
   const [phase, setPhase] = useState("pre-discovery");
   const [clientType, setClientType] = useState(project.clientType || "startup");
   const [extra, setExtra] = useState("");
-  const [copied, setCopied] = useState(false);
+  const [expanded, setExpanded] = useState(null);
+  const [copied, setCopied] = useState(null);
+  const [editingId, setEditingId] = useState(null);
+  const [editTitle, setEditTitle] = useState("");
+  const [wrapUp, setWrapUp] = useState(null); // agenda being wrapped up
+  const [wrapForm, setWrapForm] = useState({ participants: "", notes: "", date: new Date().toISOString().split("T")[0] });
+  const [wrapping, setWrapping] = useState(false);
 
-  const generateAgenda = async () => {
-    setLoading(true);
-    const reply = await askClaude([{
-      role: "user", content:
-        `Create a discovery meeting agenda for:\nProject: ${project.name}\nAbout: ${project.about}\nIndustry: ${project.industry}\nClient type: ${clientType}\nPhase: ${phase}\nExtra context: ${extra || "none"}\n\nGenerate a structured agenda with:\n1. Meeting objective (1 sentence)\n2. Participants suggested (with roles)\n3. Time blocks (e.g. 0:00–0:15 Welcome...)\n4. Key topics to cover (5-8 specific to this project and phase)\n5. Pre-work to send to client (2-4 items)\n6. Key questions to ask (6-10 specific, not generic)\n7. Expected outputs from this session\n\nBe SPECIFIC to this project. For a ${clientType}, the tone and depth should differ. Format it clearly with sections and time estimates. Total meeting: 90 minutes.`
-    }],
-      "You are a senior product discovery facilitator. Create practical, specific agendas — not generic templates. Reference the project context throughout.", 2000);
-    setAgenda(reply);
-    update({ savedAgenda: reply });
-    setLoading(false);
-  };
+  const agendas = project.agendas || [];
 
   const phases = [
     { id: "pre-discovery", label: "Pre-Discovery Kickoff" },
@@ -4101,14 +4096,76 @@ function DiscoveryMeetingPrep({ project, update }) {
     { id: "synthesis", label: "Synthesis & Wrap-Up" },
   ];
 
+  const generateAgenda = async () => {
+    setGenerating(true);
+    const phaseLabel = phases.find(p => p.id === phase)?.label || phase;
+    const reply = await askClaude([{
+      role: "user", content:
+        `Create a discovery meeting agenda for:\nProject: ${project.name}\nAbout: ${project.about}\nIndustry: ${project.industry}\nClient type: ${clientType}\nPhase: ${phase}\nExtra context: ${extra || "none"}\n\nGenerate a structured agenda with:\n1. Meeting objective (1 sentence)\n2. Participants suggested (with roles)\n3. Time blocks (e.g. 0:00–0:15 Welcome...)\n4. Key topics to cover (5-8 specific to this project and phase)\n5. Pre-work to send to client (2-4 items)\n6. Key questions to ask (6-10 specific, not generic)\n7. Expected outputs from this session\n\nBe SPECIFIC to this project. For a ${clientType}, the tone and depth should differ. Format it clearly with sections and time estimates. Total meeting: 90 minutes.`
+    }],
+      "You are a senior product discovery facilitator. Create practical, specific agendas — not generic templates. Reference the project context throughout.", 2000);
+    const newAgenda = {
+      id: uid(),
+      title: phaseLabel,
+      phase,
+      clientType,
+      content: reply,
+      createdAt: new Date().toISOString().split("T")[0],
+      wrappedUp: false,
+    };
+    const updated = [...agendas, newAgenda];
+    update({ agendas: updated });
+    setExpanded(newAgenda.id);
+    setExtra("");
+    setGenerating(false);
+  };
+
+  const deleteAgenda = (id) => {
+    if (!window.confirm("Delete this agenda?")) return;
+    update({ agendas: agendas.filter(a => a.id !== id) });
+    if (expanded === id) setExpanded(null);
+  };
+
+  const saveTitle = (id) => {
+    update({ agendas: agendas.map(a => a.id === id ? { ...a, title: editTitle } : a) });
+    setEditingId(null);
+  };
+
+  const openWrapUp = (agenda) => {
+    setWrapUp(agenda);
+    setWrapForm({ participants: "", notes: "", date: new Date().toISOString().split("T")[0] });
+  };
+
+  const confirmWrapUp = async () => {
+    if (!wrapForm.notes.trim() && !window.confirm("No notes added. Log session anyway?")) return;
+    setWrapping(true);
+    const session = {
+      id: uid(),
+      title: wrapUp.title,
+      date: wrapForm.date,
+      participants: wrapForm.participants,
+      notes: wrapForm.notes,
+      agendaId: wrapUp.id,
+      outputs: null,
+    };
+    const updatedAgendas = agendas.map(a => a.id === wrapUp.id ? { ...a, wrappedUp: true, sessionId: session.id } : a);
+    update({
+      agendas: updatedAgendas,
+      sessions: [...(project.sessions || []), session],
+    });
+    setWrapping(false);
+    setWrapUp(null);
+  };
+
   return (
     <div>
       <div className="sec-head">
-        <div><div className="sec-title">Meeting Prep</div><div className="sec-sub">AI-generated agendas and preparation materials for each discovery session</div></div>
+        <div><div className="sec-title">Meeting Prep</div><div className="sec-sub">AI-generated agendas — wrap up a meeting to auto-log it as a discovery session</div></div>
       </div>
 
+      {/* Generator */}
       <div className="card" style={{ marginBottom: 20 }}>
-        <div style={{ fontSize: 13, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne',sans-serif", marginBottom: 14 }}>Generate Meeting Agenda</div>
+        <div style={{ fontSize: 13, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne',sans-serif", marginBottom: 14 }}>Generate New Agenda</div>
         <div className="row">
           <div className="field">
             <label>Meeting Type</label>
@@ -4127,41 +4184,98 @@ function DiscoveryMeetingPrep({ project, update }) {
         </div>
         <div className="field">
           <label>Additional Context</label>
-          <textarea value={extra} onChange={e => setExtra(e.target.value)} placeholder="e.g. This is a 3rd meeting, we already have user journeys mapped. Focus on technical constraints and integration points..." rows={2} />
+          <textarea value={extra} onChange={e => setExtra(e.target.value)} placeholder="e.g. 3rd meeting, user journeys already mapped. Focus on technical constraints..." rows={2} />
         </div>
-        <button className="btn btn-primary" onClick={generateAgenda} disabled={loading} style={{ width: "100%" }}>
-          {loading ? <><div className="ai-dot" /><div className="ai-dot" style={{ animationDelay: ".2s" }} /><div className="ai-dot" style={{ animationDelay: ".4s" }} /> Generating agenda...</> : <><Sparkles size={13} /> Generate Agenda</>}
+        <button className="btn btn-primary" onClick={generateAgenda} disabled={generating} style={{ width: "100%" }}>
+          {generating ? <><div className="ai-dot" /><div className="ai-dot" style={{ animationDelay: ".2s" }} /><div className="ai-dot" style={{ animationDelay: ".4s" }} /> Generating…</> : <><Sparkles size={13} /> Generate Agenda</>}
         </button>
       </div>
 
-      {agenda && (
-        <div className="card">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
-            <div style={{ fontSize: 13, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne',sans-serif" }}>
-              {phases.find(p => p.id === phase)?.label} — Agenda
-            </div>
-            <div style={{ display: "flex", gap: 8 }}>
-              <button className="btn btn-ghost btn-sm" onClick={() => { navigator.clipboard.writeText(agenda); setCopied(true); setTimeout(() => setCopied(false), 2000); }}>
-                <Copy size={12} /> {copied ? "Copied!" : "Copy for Confluence"}
-              </button>
-              <button className="btn btn-ai btn-sm" onClick={generateAgenda}><Sparkles size={12} /> Regenerate</button>
-            </div>
-          </div>
-          <div className="md-agenda">
-            <ReactMarkdown>{agenda}</ReactMarkdown>
-          </div>
-        </div>
-      )}
-
-      {!agenda && (
+      {/* Agenda list */}
+      {agendas.length === 0 && (
         <div className="card" style={{ background: "#f8f9fa" }}>
           <div style={{ fontSize: 13, fontWeight: 600, color: "#344563", marginBottom: 10 }}>What you'll get</div>
-          {["Meeting objective tailored to your project phase", "Suggested participants with roles", "90-minute time blocks with specific topics", "Pre-work checklist to send to the client", "6–10 specific questions based on your project context", "Expected outputs from the session"].map((item, i) => (
+          {["Meeting objective tailored to your project phase", "Suggested participants with roles", "90-min time blocks with specific topics", "Pre-work checklist to send to the client", "6–10 specific questions based on your project", "Expected outputs from the session"].map((item, i) => (
             <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 6, fontSize: 13, color: "#505f79" }}>
-              <span style={{ color: "#36b37e", marginTop: 2, flexShrink: 0 }}>✓</span> {item}
+              <span style={{ color: "#36b37e", flexShrink: 0 }}>✓</span> {item}
             </div>
           ))}
         </div>
+      )}
+
+      {agendas.map(a => (
+        <div key={a.id} className="card" style={{ marginBottom: 10 }}>
+          {/* Header row */}
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <button className="icon-btn" onClick={() => setExpanded(expanded === a.id ? null : a.id)} style={{ flexShrink: 0 }}>
+              {expanded === a.id ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+            </button>
+
+            {editingId === a.id ? (
+              <input value={editTitle} onChange={e => setEditTitle(e.target.value)}
+                onBlur={() => saveTitle(a.id)} onKeyDown={e => e.key === "Enter" && saveTitle(a.id)}
+                autoFocus style={{ flex: 1, fontSize: 13, fontWeight: 600, padding: "3px 8px" }} />
+            ) : (
+              <div style={{ flex: 1 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: "#172b4d" }}>{a.title}</span>
+                <span style={{ fontSize: 11, color: "#97a0af", marginLeft: 8 }}>{a.createdAt}</span>
+                {a.wrappedUp && <span style={{ fontSize: 10, color: "#36b37e", fontWeight: 700, background: "#e3fcef", borderRadius: 4, padding: "1px 7px", marginLeft: 8, fontFamily: "'DM Mono',monospace" }}>LOGGED</span>}
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+              {!a.wrappedUp && (
+                <button className="btn btn-primary btn-sm" onClick={() => openWrapUp(a)} title="Wrap up — log as a session">
+                  <CheckCircle2 size={12} /> Wrap Up
+                </button>
+              )}
+              <button className="btn btn-ghost btn-sm" onClick={() => { navigator.clipboard.writeText(a.content); setCopied(a.id); setTimeout(() => setCopied(null), 2000); }}>
+                <Copy size={12} /> {copied === a.id ? "Copied!" : "Copy"}
+              </button>
+              <button className="icon-btn" onClick={() => { setEditingId(a.id); setEditTitle(a.title); }} title="Edit title"><Edit2 size={13} /></button>
+              <button className="icon-btn" onClick={() => deleteAgenda(a.id)} title="Delete"><Trash2 size={13} /></button>
+            </div>
+          </div>
+
+          {/* Expanded content */}
+          {expanded === a.id && (
+            <div style={{ marginTop: 16, paddingTop: 16, borderTop: "1px solid #ebecf0" }}>
+              <div className="md-agenda">
+                <ReactMarkdown>{a.content}</ReactMarkdown>
+              </div>
+            </div>
+          )}
+        </div>
+      ))}
+
+      {/* Wrap Up modal */}
+      {wrapUp && (
+        <Modal title={`Wrap Up — ${wrapUp.title}`} onClose={() => setWrapUp(null)}
+          footer={
+            <><button className="btn btn-ghost" onClick={() => setWrapUp(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={confirmWrapUp} disabled={wrapping}>
+                <CheckCircle2 size={13} /> {wrapping ? "Logging…" : "Log Session"}
+              </button></>
+          }>
+          <p style={{ fontSize: 13, color: "#6b778c", lineHeight: 1.65, marginBottom: 16 }}>
+            This will create a session log in <strong>Sessions & Outputs</strong> linked to this agenda. Add your notes from the meeting below.
+          </p>
+          <div className="row">
+            <div className="field">
+              <label>Date</label>
+              <input type="date" value={wrapForm.date} onChange={e => setWrapForm(f => ({ ...f, date: e.target.value }))} />
+            </div>
+            <div className="field">
+              <label>Participants</label>
+              <input value={wrapForm.participants} onChange={e => setWrapForm(f => ({ ...f, participants: e.target.value }))} placeholder="e.g. PM, CTO, Design Lead" />
+            </div>
+          </div>
+          <div className="field">
+            <label>Session Notes</label>
+            <textarea value={wrapForm.notes} onChange={e => setWrapForm(f => ({ ...f, notes: e.target.value }))}
+              placeholder="Paste or type what happened in the meeting — decisions made, things discussed, surprises. AI will extract outputs later." rows={7} />
+          </div>
+        </Modal>
       )}
     </div>
   );
