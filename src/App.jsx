@@ -5808,14 +5808,51 @@ function DiscoveryStakeholders({ project, update }) {
 
 // ─── Discovery AI Colleague ───────────────────────────────────────────────────
 function DiscoveryAIColleague({ project, update }) {
-  const [msgs, setMsgs] = useState([
-    { role: "ai", text: `Hi! I'm your discovery colleague for **${project.name}**.\n\nI have full context of everything you've gathered — sessions, risks, opportunities, assumptions, story map, architecture, and more.\n\nUse me to **validate ideas**, **prep for meetings**, **identify gaps**, or just think out loud. I can also add risks, opportunities, assumptions, and flows directly to your project.\n\nWhat's on your mind?` }
-  ]);
+  const WELCOME = { role: "ai", text: `Hi! I'm your discovery colleague for **${project.name}**.\n\nI have full context of everything you've gathered — sessions, risks, opportunities, assumptions, story map, architecture, and more.\n\nUse me to **validate ideas**, **prep for meetings**, **identify gaps**, or just think out loud. I can also add risks, opportunities, assumptions, and flows directly to your project.\n\nWhat's on your mind?` };
+
+  const aiChats = project.aiChats || [];
+  const currentChatRef = useRef(null); // tracks the active chat id without re-renders
+  const [msgs, setMsgs] = useState([WELCOME]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [pending, setPending] = useState(null);
+  const [showHistory, setShowHistory] = useState(aiChats.length > 0);
   const bottomRef = useRef(null);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: "smooth" }); }, [msgs, pending]);
+
+  const startNew = () => {
+    currentChatRef.current = null;
+    setMsgs([WELCOME]);
+    setInput("");
+    setPending(null);
+  };
+
+  const loadChat = (chat) => {
+    currentChatRef.current = chat.id;
+    setMsgs(chat.messages);
+    setPending(null);
+  };
+
+  const persistMessages = (newMsgs) => {
+    const chatId = currentChatRef.current;
+    const chats = project.aiChats || [];
+    if (chatId) {
+      update({ aiChats: chats.map(c => c.id === chatId ? { ...c, messages: newMsgs, updatedAt: new Date().toISOString() } : c) });
+    } else {
+      const firstUser = newMsgs.find(m => m.role === "user");
+      if (!firstUser) return;
+      const newId = uid();
+      currentChatRef.current = newId;
+      const newChat = {
+        id: newId,
+        title: firstUser.text.slice(0, 70),
+        date: new Date().toISOString().split("T")[0],
+        updatedAt: new Date().toISOString(),
+        messages: newMsgs,
+      };
+      update({ aiChats: [newChat, ...chats] });
+    }
+  };
 
   const sessions = project.sessions || [];
   const risks = project.risks || [];
@@ -5906,43 +5943,49 @@ Be specific to this project. Reference what's already known. Challenge vague sta
         const parsed = JSON.parse(artifactMatch[1].trim());
         if (parsed.type && Array.isArray(parsed.items) && parsed.items.length > 0) {
           const cleanReply = reply.replace(/ARTIFACTS:\s*```[\s\S]*?```/, "").trim();
-          setMsgs(prev => [...prev.slice(0, -1), { role: "ai", text: cleanReply || `I've prepared ${parsed.items.length} ${parsed.type} to add:` }]);
+          const finalMsgs = [...newMsgs, { role: "ai", text: cleanReply || `I've prepared ${parsed.items.length} ${parsed.type} to add:` }];
+          setMsgs(finalMsgs);
+          persistMessages(finalMsgs);
           setPending(parsed);
           return;
         }
       } catch {}
     }
-    setMsgs(prev => [...prev.slice(0, -1), { role: "ai", text: reply }]);
+    const finalMsgs = [...newMsgs, { role: "ai", text: reply }];
+    setMsgs(finalMsgs);
+    persistMessages(finalMsgs);
   };
 
   const acceptArtifacts = () => {
     if (!pending) return;
     const { type, items } = pending;
+    let confirmMsg = "";
     if (type === "risks") {
       const newRisks = items.map(r => ({ id: uid(), text: r.text, source: r.source || "AI colleague" }));
       update({ risks: [...risks, ...newRisks] });
-      setMsgs(prev => [...prev, { role: "ai", text: `✓ Added ${newRisks.length} risk${newRisks.length > 1 ? "s" : ""} to the project.` }]);
+      confirmMsg = `✓ Added ${newRisks.length} risk${newRisks.length > 1 ? "s" : ""} to the project.`;
     } else if (type === "opportunities") {
       const newOpps = items.map(o => ({ id: uid(), text: o.text, source: o.source || "AI colleague" }));
       update({ opportunities: [...opportunities, ...newOpps] });
-      setMsgs(prev => [...prev, { role: "ai", text: `✓ Added ${newOpps.length} opportunit${newOpps.length > 1 ? "ies" : "y"} to the project.` }]);
+      confirmMsg = `✓ Added ${newOpps.length} opportunit${newOpps.length > 1 ? "ies" : "y"} to the project.`;
     } else if (type === "assumptions") {
       update({ assumptions: [...assumptions, ...items] });
-      setMsgs(prev => [...prev, { role: "ai", text: `✓ Added ${items.length} assumption${items.length > 1 ? "s" : ""} to the project.` }]);
+      confirmMsg = `✓ Added ${items.length} assumption${items.length > 1 ? "s" : ""} to the project.`;
     } else if (type === "flows") {
       update({ flows: [...flows, ...items] });
-      setMsgs(prev => [...prev, { role: "ai", text: `✓ Added ${items.length} user flow${items.length > 1 ? "s" : ""} to the project.` }]);
+      confirmMsg = `✓ Added ${items.length} user flow${items.length > 1 ? "s" : ""} to the project.`;
     } else if (type === "todos") {
       const newTodos = items.map(t => ({ ...t, id: uid(), done: false, source: "AI colleague", createdAt: new Date().toISOString().split("T")[0] }));
       update({ todos: [...(project.todos || []), ...newTodos] });
-      setMsgs(prev => [...prev, { role: "ai", text: `✓ Added ${newTodos.length} task${newTodos.length > 1 ? "s" : ""} to To Do.` }]);
+      confirmMsg = `✓ Added ${newTodos.length} task${newTodos.length > 1 ? "s" : ""} to To Do.`;
     }
     setPending(null);
+    setMsgs(prev => { const updated = [...prev, { role: "ai", text: confirmMsg }]; persistMessages(updated); return updated; });
   };
 
   const rejectArtifacts = () => {
-    setMsgs(prev => [...prev, { role: "ai", text: "Got it — discarded. Tell me how you'd like to adjust them." }]);
     setPending(null);
+    setMsgs(prev => { const updated = [...prev, { role: "ai", text: "Got it — discarded. Tell me how you'd like to adjust them." }]; persistMessages(updated); return updated; });
   };
 
   const ArtifactPreview = ({ pending }) => {
@@ -5989,38 +6032,65 @@ Be specific to this project. Reference what's already known. Challenge vague sta
           <div className="sec-title">AI Colleague</div>
           <div className="sec-sub">Full discovery context — validate ideas, prep meetings, identify gaps, add findings</div>
         </div>
-        <div style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 12, color: "#97a0af" }}>
-          <span>{sessions.length} sessions</span>
-          <span>·</span>
-          <span>{risks.length} risks</span>
-          <span>·</span>
-          <span>{opportunities.length} opps</span>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", fontSize: 12, color: "#97a0af" }}>
+            <span>{sessions.length} sessions</span><span>·</span>
+            <span>{risks.length} risks</span><span>·</span>
+            <span>{opportunities.length} opps</span>
+          </div>
+          {aiChats.length > 0 && (
+            <button className="btn btn-ghost btn-sm" onClick={() => setShowHistory(h => !h)}>
+              <Clock size={12} /> {showHistory ? "Hide" : "History"} {aiChats.length > 0 && <span style={{ background: "#f1f2f4", borderRadius: 10, padding: "0 5px", fontSize: 10 }}>{aiChats.length}</span>}
+            </button>
+          )}
+          <button className="btn btn-ghost btn-sm" onClick={startNew}><Plus size={12} /> New Chat</button>
         </div>
       </div>
 
-      <div style={{ background: "#ffffff", border: "1px solid #dfe1e6", borderRadius: 12, overflow: "hidden", display: "flex", flexDirection: "column", height: 560 }}>
-        <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 8px" }}>
-          {msgs.map((m, i) => (
-            <div key={i} className={`ai-bubble ai-bubble-${m.role === "ai" ? "bot" : "user"}`} style={{ whiteSpace: m.role === "ai" ? "normal" : undefined }}>
-              {m.text === "..." ? <div className="ai-typing"><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div> : m.role === "ai" ? <div className="md-agenda" style={{ fontSize: 13 }}><ReactMarkdown>{m.text}</ReactMarkdown></div> : m.text}
+      <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
+        {/* History sidebar */}
+        {showHistory && aiChats.length > 0 && (
+          <div style={{ width: 220, flexShrink: 0, background: "#fff", border: "1px solid #dfe1e6", borderRadius: 12, overflow: "hidden" }}>
+            <div style={{ padding: "12px 14px 8px", borderBottom: "1px solid #ebecf0", fontSize: 11, fontWeight: 700, color: "#97a0af", textTransform: "uppercase", letterSpacing: ".06em", fontFamily: "'DM Mono',monospace" }}>Past Chats</div>
+            <div style={{ maxHeight: 520, overflowY: "auto" }}>
+              {aiChats.map(chat => (
+                <button key={chat.id} onClick={() => loadChat(chat)}
+                  style={{ width: "100%", textAlign: "left", padding: "10px 14px", background: currentChatRef.current === chat.id ? "#e8f0fe" : "transparent", border: "none", borderBottom: "1px solid #f1f2f4", cursor: "pointer", transition: "background .12s" }}
+                  onMouseEnter={e => { if (currentChatRef.current !== chat.id) e.currentTarget.style.background = "#f8f9fa"; }}
+                  onMouseLeave={e => { if (currentChatRef.current !== chat.id) e.currentTarget.style.background = "transparent"; }}>
+                  <div style={{ fontSize: 12, color: currentChatRef.current === chat.id ? "#0052cc" : "#344563", fontWeight: 500, lineHeight: 1.4, overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical", marginBottom: 4 }}>{chat.title}</div>
+                  <div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace" }}>{chat.date} · {chat.messages.filter(m => m.role === "user").length} msg{chat.messages.filter(m => m.role === "user").length !== 1 ? "s" : ""}</div>
+                </button>
+              ))}
             </div>
-          ))}
-          {pending && <ArtifactPreview pending={pending} />}
-          <div ref={bottomRef} />
-        </div>
-        {msgs.length <= 1 && !pending && (
-          <div style={{ padding: "8px 12px", display: "flex", gap: 6, flexWrap: "wrap", borderTop: "1px solid #dfe1e6" }}>
-            {quickPrompts.map(p => (
-              <button key={p} className="btn btn-ghost btn-sm" onClick={() => setInput(p)} style={{ fontSize: 11 }}>{p}</button>
-            ))}
           </div>
         )}
-        <div style={{ display: "flex", gap: 8, padding: "12px", borderTop: "1px solid #dfe1e6" }}>
-          <textarea value={input} onChange={e => setInput(e.target.value)}
-            onKeyDown={e => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), send())}
-            placeholder="Ask anything — validate assumptions, prep a meeting, paste notes to discuss… (Enter to send)"
-            style={{ minHeight: "unset", height: 40, padding: "10px 12px", resize: "none", flex: 1 }} />
-          <button className="btn btn-primary" onClick={send} disabled={loading || !input.trim()} style={{ padding: "8px 14px" }}><Send size={13} /></button>
+
+        {/* Chat panel */}
+        <div style={{ flex: 1, background: "#ffffff", border: "1px solid #dfe1e6", borderRadius: 12, overflow: "hidden", display: "flex", flexDirection: "column", height: 560 }}>
+          <div style={{ flex: 1, overflowY: "auto", padding: "16px 16px 8px" }}>
+            {msgs.map((m, i) => (
+              <div key={i} className={`ai-bubble ai-bubble-${m.role === "ai" ? "bot" : "user"}`} style={{ whiteSpace: m.role === "ai" ? "normal" : undefined }}>
+                {m.text === "..." ? <div className="ai-typing"><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div> : m.role === "ai" ? <div className="md-agenda" style={{ fontSize: 13 }}><ReactMarkdown>{m.text}</ReactMarkdown></div> : m.text}
+              </div>
+            ))}
+            {pending && <ArtifactPreview pending={pending} />}
+            <div ref={bottomRef} />
+          </div>
+          {msgs.length <= 1 && !pending && (
+            <div style={{ padding: "8px 12px", display: "flex", gap: 6, flexWrap: "wrap", borderTop: "1px solid #dfe1e6" }}>
+              {quickPrompts.map(p => (
+                <button key={p} className="btn btn-ghost btn-sm" onClick={() => setInput(p)} style={{ fontSize: 11 }}>{p}</button>
+              ))}
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 8, padding: "12px", borderTop: "1px solid #dfe1e6" }}>
+            <textarea value={input} onChange={e => setInput(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), send())}
+              placeholder="Ask anything — validate assumptions, prep a meeting, paste notes to discuss… (Enter to send)"
+              style={{ minHeight: "unset", height: 40, padding: "10px 12px", resize: "none", flex: 1 }} />
+            <button className="btn btn-primary" onClick={send} disabled={loading || !input.trim()} style={{ padding: "8px 14px" }}><Send size={13} /></button>
+          </div>
         </div>
       </div>
     </div>
