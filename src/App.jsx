@@ -6229,9 +6229,19 @@ function StoryMappingSection({ project, update }) {
               {backbone.map(stage => (
                 <div key={stage.id} style={{ width: 240, flexShrink: 0 }}>
                   {/* Backbone stage header */}
-                  <div style={{ background: "#172b4d", color: "#ffffff", borderRadius: "8px 8px 0 0", padding: "10px 12px", marginBottom: 2 }}>
-                    <div style={{ fontSize: 12, fontWeight: 700 }}>{stage.stage}</div>
-                    <div style={{ fontSize: 10, color: "#b3bac5", marginTop: 2 }}>{stage.description}</div>
+                  <div style={{ background: "#172b4d", color: "#ffffff", borderRadius: "8px 8px 0 0", padding: "10px 12px", marginBottom: 2, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 700 }}>{stage.stage}</div>
+                      <div style={{ fontSize: 10, color: "#b3bac5", marginTop: 2 }}>{stage.description}</div>
+                    </div>
+                    <button
+                      onClick={() => { if (window.confirm(`Delete stage "${stage.stage}" and all its epics?`)) { const up = backbone.filter(s => s.id !== stage.id); update({ backbone: up, storyMap: up }); } }}
+                      title="Delete stage"
+                      style={{ background: "transparent", border: "none", cursor: "pointer", color: "#8993a4", padding: 2, flexShrink: 0, lineHeight: 1, borderRadius: 4, transition: "color .12s" }}
+                      onMouseEnter={e => e.currentTarget.style.color = "#ff7452"}
+                      onMouseLeave={e => e.currentTarget.style.color = "#8993a4"}>
+                      <Trash2 size={12} />
+                    </button>
                   </div>
 
                   {/* Epics */}
