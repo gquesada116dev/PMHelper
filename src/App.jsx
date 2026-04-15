@@ -6069,8 +6069,7 @@ function WireframePrototype({ projectContext, data = {}, onSave, defaultScreens 
 
   const buildPrompt = (extra = "") => {
     const list = screens.map((s, i) => `  ${i + 1}. "${s.name}"${s.description ? ` — ${s.description}` : ""}`).join("\n");
-    const firstSlug = screens[0] ? screens[0].name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") : "home";
-    return `Generate a complete, self-contained HTML lo-fi wireframe prototype. CRITICAL: use ONLY CSS for navigation — absolutely NO JavaScript of any kind.
+    return `Generate a complete, self-contained HTML lo-fi wireframe prototype.
 
 PROJECT: ${projectContext.name}
 About: ${projectContext.about || ""}
@@ -6080,25 +6079,26 @@ ${extra ? `\nCHANGE REQUEST: ${extra}\n` : ""}
 SCREENS:
 ${list}
 
-NAVIGATION SYSTEM (CSS :target — no JS):
-- Each screen: <div class="screen" id="screen-SLUG">
-- All screens hidden by default: .screen { display: none }
-- First screen visible: #screen-${firstSlug} { display: block }
-- Targeted screen visible: .screen:target { display: block }
-- Hide first when another is targeted: :has(.screen:target:not(#screen-${firstSlug})) #screen-${firstSlug} { display: none }
-- All navigation links: <a href="#screen-SLUG"> — never use onclick or JS
+NAVIGATION SYSTEM — follow exactly:
+1. Put this as the FIRST tag inside <head>:
+   <meta http-equiv="Content-Security-Policy" content="script-src 'unsafe-inline';">
+2. Put this script in <head> (before </head>):
+   <script>function showScreen(id){document.querySelectorAll('.screen').forEach(function(s){s.style.display='none';});document.getElementById(id).style.display='block';var el=document.getElementById('current-screen');if(el)el.textContent=id.replace('screen-','').replace(/-/g,' ');}</script>
+3. Each screen div: <div class="screen" id="screen-SLUG" style="display:none">
+4. FIRST screen only: style="display:block" (visible by default, no JS needed)
+5. Every button/link that navigates: onclick="showScreen('screen-SLUG')" — use <a> or <button> tags with this onclick
+6. Screen switcher bar at bottom: one button per screen, each with onclick="showScreen('screen-SLUG')"
+7. Top bar: show current screen name in <span id="current-screen">[first screen name]</span>
 
 DESIGN REQUIREMENTS:
-- Single .html file — inline CSS only, zero JavaScript, zero external dependencies
-- Lo-fi wireframe aesthetic: white bg, #e0e0e0 placeholder boxes, #333 text, simple borders
-- ${isMobile ? "Center content at max-width:390px with a light border to simulate a phone" : "Full-width desktop layout with appropriate nav/sidebar"}
-- Sticky top bar on every screen: project name left, current screen name center (use CSS to show/hide per screen), back link right
-- Placeholder images: <div style="background:#e0e0e0;border-radius:6px;width:100%;height:160px;display:flex;align-items:center;justify-content:center;color:#999;font-size:13px">Image</div>
+- Single .html file — inline CSS + the JS above, zero external dependencies
+- Lo-fi wireframe: white bg, #e8e8e8 placeholder boxes, #222 text, clean borders
+- ${isMobile ? "max-width:390px centered, light border to simulate phone frame" : "Full-width desktop with appropriate top nav or sidebar"}
+- Placeholder images: <div style="background:#e8e8e8;border-radius:6px;width:100%;height:160px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:13px">Image placeholder</div>
 - Realistic placeholder text (not Lorem Ipsum) — match the product context
-- Fixed screen-switcher bar at the very bottom with an <a href="#screen-SLUG"> link for every screen
-- Make every button and link navigate somewhere meaningful using href="#screen-SLUG"
+- Every button must go somewhere — no dead ends
 
-Return ONLY the complete HTML document. No markdown fences. No explanation. Begin with <!DOCTYPE html>.`;
+Return ONLY the complete HTML document. No markdown. No explanation. Begin with <!DOCTYPE html>.`;
   };
 
   const persist = (newHtml, newScreens) => {
@@ -6121,8 +6121,8 @@ Return ONLY the complete HTML document. No markdown fences. No explanation. Begi
     if (!iterPrompt.trim() || !html) return;
     setIterating(true);
     const reply = await askClaude(
-      [{ role: "user", content: `Current HTML wireframe:\n\n${html}\n\n---\nCHANGE REQUEST: ${iterPrompt}\n\nApply the changes and return the COMPLETE updated HTML. Keep the CSS :target navigation system — no JavaScript. No markdown. No explanation.` }],
-      "You are a UX wireframe generator. Use only CSS :target for navigation — no JavaScript. Return the complete updated HTML document. No markdown fences. No explanation.", 6000);
+      [{ role: "user", content: `Current HTML wireframe:\n\n${html}\n\n---\nCHANGE REQUEST: ${iterPrompt}\n\nApply the changes and return the COMPLETE updated HTML. Keep the showScreen() JS navigation and the meta CSP tag. No markdown. No explanation.` }],
+      "You are a UX wireframe generator. Keep the showScreen() navigation JS and meta CSP tag intact. Return the complete updated HTML document. No markdown fences. No explanation.", 6000);
     setIterating(false);
     const clean = reply.replace(/^```html?\s*/i, "").replace(/\n?```\s*$/, "").trim();
     setHtml(clean);
