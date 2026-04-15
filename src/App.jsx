@@ -9,7 +9,7 @@ import {
   MoreVertical, ArrowRight, CheckCircle2, Circle, Link, Link2, ExternalLink,
   Settings, Unlink, Search, Map, Cpu, FileText, DollarSign, Presentation,
   ChevronUp, Copy, GripVertical, BarChart2, GitBranch, Package, Rocket,
-  ClipboardList, Lightbulb, Compass, ArrowUpRight
+  ClipboardList, Lightbulb, Compass, ArrowUpRight, Upload
 } from "lucide-react";
 
 const uid = () => Math.random().toString(36).slice(2, 9);
@@ -863,6 +863,7 @@ export default function App() {
     "d-overview": <DiscoveryOverview project={project} update={update} setSection={setSection} />,
     "d-meetings": <DiscoveryMeetingPrep project={project} update={update} />,
     "d-sessions": <DiscoverySessions project={project} update={update} />,
+    "d-docs": <DiscoveryDocuments project={project} update={update} />,
     "d-stakeholders": <DiscoveryStakeholders project={project} update={update} />,
     "d-ai": <DiscoveryAIColleague project={project} update={update} />,
     "d-storymap": <StoryMappingSection project={project} update={update} />,
@@ -942,6 +943,7 @@ function Sidebar({ projects, pid, setPid, section, setSection, onNew, jiraConnec
     { id: "d-overview", label: "Overview", Icon: Compass, section: null },
     { id: "d-meetings", label: "Meeting Prep", Icon: ClipboardList, section: "DISCOVERY" },
     { id: "d-sessions", label: "Sessions & Outputs", Icon: FileText, section: null },
+    { id: "d-docs", label: "Research Docs", Icon: Upload, section: null },
     { id: "d-stakeholders", label: "Stakeholders", Icon: Users, section: null },
     { id: "d-storymap", label: "Story Mapping", Icon: Map, section: "MAPPING" },
     { id: "d-planning", label: "Tech Planning", Icon: Cpu, section: "PLANNING" },
@@ -4057,6 +4059,7 @@ function DiscoveryOverview({ project, update, setSection }) {
           {[
             { id: "d-meetings", label: "Meeting Prep", desc: "Generate agenda & prepare questions", Icon: ClipboardList },
             { id: "d-sessions", label: "Sessions", desc: "Log notes, extract insights with AI", Icon: FileText },
+            { id: "d-docs", label: "Research Docs", desc: "Upload PDFs & briefs, AI extracts insights", Icon: Upload },
             { id: "d-stakeholders", label: "Stakeholders", desc: "Map influence, auto-fill from sessions", Icon: Users },
             { id: "d-ai", label: "AI Colleague", desc: "Validate ideas, prep meetings, find gaps", Icon: Bot },
             { id: "d-storymap", label: "Story Mapping", desc: "Backbone → Epics → Features", Icon: Map },
@@ -4490,6 +4493,212 @@ function DiscoverySessions({ project, update }) {
   );
 }
 
+// ─── Discovery Documents ──────────────────────────────────────────────────────
+function DiscoveryDocuments({ project, update }) {
+  const [processing, setProcessing] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  const [expanded, setExpanded] = useState(null);
+  const fileInputRef = useRef(null);
+
+  const docs = project.documents || [];
+
+  const ACCEPTED = [".pdf", ".txt", ".md", ".csv"];
+
+  const readAsBase64 = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result.split(",")[1]);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+  const readAsText = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsText(file);
+  });
+
+  const handleFile = async (file) => {
+    const ext = "." + file.name.split(".").pop().toLowerCase();
+    if (!ACCEPTED.includes(ext)) {
+      alert("Unsupported file type. Please upload a PDF, TXT, MD, or CSV file.");
+      return;
+    }
+    setProcessing(true);
+    try {
+      const isPDF = ext === ".pdf";
+      const prompt = `You are analyzing a document for a product discovery project.\n\nProject: ${project.name}\nIndustry: ${project.industry}\nClient type: ${project.clientType || "startup"}\nFile: ${file.name}\n\nExtract discovery insights. Return ONLY valid JSON:\n{\n  "title": "document title (infer from content)",\n  "summary": "2-3 sentence description of what this document is",\n  "context": "Key background info, decisions, or requirements relevant to this project (100-200 words)",\n  "risks": [{"text": "specific risk", "source": "${file.name}"}],\n  "opportunities": [{"text": "specific opportunity", "source": "${file.name}"}],\n  "assumptions": ["assumption string"]\n}`;
+
+      let msgContent;
+      if (isPDF) {
+        const base64 = await readAsBase64(file);
+        msgContent = [
+          { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64 } },
+          { type: "text", text: prompt },
+        ];
+      } else {
+        const text = await readAsText(file);
+        msgContent = prompt + "\n\nDocument content:\n" + text.slice(0, 12000);
+      }
+
+      const r = await fetch("/api/claude", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messages: [{ role: "user", content: msgContent }],
+          system: "Discovery analyst. Extract structured insights from documents. Return only valid JSON.",
+          maxTokens: 1800,
+        }),
+      });
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+
+      const parsed = parseJSON(d.text);
+      if (!parsed) throw new Error("Could not parse AI response — try again.");
+
+      const newDoc = {
+        id: uid(),
+        filename: file.name,
+        title: parsed.title || file.name,
+        summary: parsed.summary || "",
+        context: parsed.context || "",
+        uploadedAt: new Date().toISOString().split("T")[0],
+        risksAdded: (parsed.risks || []).length,
+        oppsAdded: (parsed.opportunities || []).length,
+        assumptionsAdded: (parsed.assumptions || []).length,
+      };
+
+      update({
+        documents: [...docs, newDoc],
+        risks: [...(project.risks || []), ...(parsed.risks || []).map(r => ({ ...r, id: uid() }))],
+        opportunities: [...(project.opportunities || []), ...(parsed.opportunities || []).map(o => ({ ...o, id: uid() }))],
+        assumptions: [...(project.assumptions || []), ...(parsed.assumptions || [])],
+      });
+      setExpanded(newDoc.id);
+    } catch (e) {
+      alert("Failed to process file: " + e.message);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const onDrop = (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    const file = e.dataTransfer.files[0];
+    if (file) handleFile(file);
+  };
+
+  const deleteDoc = (id) => {
+    if (!window.confirm("Remove this document? Risks and opportunities already extracted will stay.")) return;
+    update({ documents: docs.filter(d => d.id !== id) });
+    if (expanded === id) setExpanded(null);
+  };
+
+  return (
+    <div>
+      <div className="sec-head">
+        <div>
+          <div className="sec-title">Research Docs</div>
+          <div className="sec-sub">Upload PDFs, briefs, or notes — AI extracts risks, opportunities, and context automatically</div>
+        </div>
+        {docs.length > 0 && (
+          <button className="btn btn-primary" onClick={() => fileInputRef.current?.click()} disabled={processing}>
+            <Upload size={13} /> Upload
+          </button>
+        )}
+      </div>
+
+      {/* Upload area */}
+      <div
+        onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={onDrop}
+        onClick={() => !processing && fileInputRef.current?.click()}
+        style={{
+          border: `2px dashed ${dragOver ? "#e8c547" : "#dfe1e6"}`,
+          borderRadius: 10, padding: processing ? "28px 24px" : "32px 24px",
+          textAlign: "center", cursor: processing ? "default" : "pointer",
+          background: dragOver ? "rgba(232,197,71,.06)" : "#fafbfc",
+          transition: "all .15s", marginBottom: 20,
+        }}>
+        {processing ? (
+          <div>
+            <div style={{ display: "flex", gap: 6, justifyContent: "center", marginBottom: 10 }}>
+              <div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" />
+            </div>
+            <div style={{ fontSize: 13, color: "#505f79", fontWeight: 500 }}>Analysing document…</div>
+            <div style={{ fontSize: 12, color: "#97a0af", marginTop: 4 }}>Extracting risks, opportunities, and context</div>
+          </div>
+        ) : (
+          <div>
+            <Upload size={24} color={dragOver ? "#e8c547" : "#b3bac5"} style={{ marginBottom: 10 }} />
+            <div style={{ fontSize: 13, fontWeight: 600, color: "#344563", marginBottom: 4 }}>
+              {dragOver ? "Drop it here" : "Drop a file or click to upload"}
+            </div>
+            <div style={{ fontSize: 12, color: "#97a0af" }}>PDF, TXT, MD, CSV — up to ~50 pages</div>
+          </div>
+        )}
+        <input ref={fileInputRef} type="file" accept=".pdf,.txt,.md,.csv" style={{ display: "none" }}
+          onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }} />
+      </div>
+
+      {/* Document list */}
+      {docs.length === 0 && !processing && (
+        <div className="card" style={{ background: "#f8f9fa" }}>
+          <div style={{ fontSize: 13, fontWeight: 600, color: "#344563", marginBottom: 10 }}>What gets extracted</div>
+          {[
+            "Risks and blockers mentioned in the document",
+            "Opportunities or untapped areas identified",
+            "Assumptions embedded in requirements or briefs",
+            "Key context added to the AI Colleague's knowledge",
+          ].map((item, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, alignItems: "flex-start", marginBottom: 6, fontSize: 13, color: "#505f79" }}>
+              <span style={{ color: "#36b37e", flexShrink: 0 }}>✓</span> {item}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {docs.map(doc => (
+        <div key={doc.id} className="card" style={{ marginBottom: 10 }}>
+          <div style={{ display: "flex", alignItems: "flex-start", gap: 12 }}>
+            <div style={{ width: 34, height: 34, borderRadius: 8, background: "#f0f1f3", display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>
+              <FileText size={16} color="#6b778c" />
+            </div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 600, fontSize: 13, color: "#172b4d", marginBottom: 2 }}>{doc.title}</div>
+              <div style={{ fontSize: 11, color: "#97a0af", marginBottom: 6 }}>{doc.filename} · {doc.uploadedAt}</div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {doc.risksAdded > 0 && <span style={{ fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono',monospace", padding: "1px 7px", borderRadius: 4, background: "#ffebe6", color: "#de350b" }}>{doc.risksAdded} risk{doc.risksAdded > 1 ? "s" : ""}</span>}
+                {doc.oppsAdded > 0 && <span style={{ fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono',monospace", padding: "1px 7px", borderRadius: 4, background: "#e3fcef", color: "#00632b" }}>{doc.oppsAdded} opp{doc.oppsAdded > 1 ? "s" : ""}</span>}
+                {doc.assumptionsAdded > 0 && <span style={{ fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono',monospace", padding: "1px 7px", borderRadius: 4, background: "#fff8e1", color: "#7a5c00" }}>{doc.assumptionsAdded} assumption{doc.assumptionsAdded > 1 ? "s" : ""}</span>}
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+              <button className="icon-btn" onClick={() => setExpanded(expanded === doc.id ? null : doc.id)} title="View context">
+                {expanded === doc.id ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              </button>
+              <button className="icon-btn" onClick={() => deleteDoc(doc.id)} title="Remove"><Trash2 size={13} /></button>
+            </div>
+          </div>
+
+          {expanded === doc.id && (
+            <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid #ebecf0" }}>
+              {doc.summary && (
+                <div style={{ fontSize: 12, color: "#505f79", lineHeight: 1.65, marginBottom: doc.context ? 10 : 0, fontStyle: "italic" }}>{doc.summary}</div>
+              )}
+              {doc.context && (
+                <div style={{ fontSize: 12, color: "#344563", lineHeight: 1.7, background: "#f8f9fa", borderRadius: 8, padding: "10px 14px" }}>{doc.context}</div>
+              )}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ─── Discovery Stakeholders ───────────────────────────────────────────────────
 function DiscoveryStakeholders({ project, update }) {
   const blank = { name: "", role: "", influence: "Medium", availability: "Available", notes: "" };
@@ -4705,11 +4914,16 @@ function DiscoveryAIColleague({ project, update }) {
   const backbone = project.backbone || [];
   const agendas = project.agendas || [];
   const personas = project.personas || [];
+  const docs = project.documents || [];
 
   const FENCE = "```";
   const sessionSummary = sessions.map(s =>
     `  - "${s.title}" (${s.date}, ${s.participants})${s.outputs ? `: risks=${s.outputs.risks?.length || 0}, opps=${s.outputs.opportunities?.length || 0}, decisions=${s.outputs.keyDecisions?.length || 0}` : ": no outputs extracted yet"}`
   ).join("\n") || "  none yet";
+
+  const docSummary = docs.map(d =>
+    `  - "${d.title}" (${d.filename}): ${d.summary}${d.context ? `\n    Context: ${d.context.slice(0, 200)}` : ""}`
+  ).join("\n") || "  none uploaded yet";
 
   const SYSTEM = `You are a senior product discovery facilitator and AI colleague embedded in a discovery project tool.
 
@@ -4727,6 +4941,9 @@ Personas: ${personas.map(p => p.role).join(", ") || "none yet"}
 
 SESSIONS CONDUCTED (${sessions.length}):
 ${sessionSummary}
+
+RESEARCH DOCUMENTS (${docs.length}):
+${docSummary}
 
 STORY MAP BACKBONE (${backbone.length} stages):
 ${backbone.map(s => `  ${s.stage}: ${(s.epics || []).map(e => e.title).join(", ")}`).join("\n") || "  not yet built"}
