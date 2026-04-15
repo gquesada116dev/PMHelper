@@ -941,12 +941,12 @@ function Sidebar({ projects, pid, setPid, section, setSection, onNew, jiraConnec
     { id: "d-overview", label: "Overview", Icon: Compass, section: null },
     { id: "d-meetings", label: "Meeting Prep", Icon: ClipboardList, section: "DISCOVERY" },
     { id: "d-sessions", label: "Sessions & Outputs", Icon: FileText, section: null },
-    { id: "d-ai", label: "AI Colleague", Icon: Bot, section: null },
     { id: "d-storymap", label: "Story Mapping", Icon: Map, section: "MAPPING" },
     { id: "d-planning", label: "Tech Planning", Icon: Cpu, section: "PLANNING" },
     { id: "d-design", label: "Design Planning", Icon: Palette, section: null },
     { id: "d-team", label: "Team & Estimation", Icon: BarChart2, section: "DELIVERY" },
     { id: "d-presentation", label: "Client Presentation", Icon: Presentation, section: null },
+    { id: "d-ai", label: "AI Colleague", Icon: Bot, section: null },
   ];
 
   const navItems = isDiscovery ? discoveryNav : deliveryNav;
