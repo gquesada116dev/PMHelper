@@ -5225,11 +5225,19 @@ function DiscoveryDocuments({ project, update }) {
   const [processing, setProcessing] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [expanded, setExpanded] = useState(null);
+  const [pendingFile, setPendingFile] = useState(null); // file awaiting context modal
+  const [docContext, setDocContext] = useState({ importance: "reference", note: "" });
   const fileInputRef = useRef(null);
 
   const docs = project.documents || [];
 
   const ACCEPTED = [".pdf", ".txt", ".md", ".csv"];
+
+  const IMPORTANCE = {
+    critical:  { label: "Critical",   color: "#de350b", bg: "#ffebe6", border: "#ffd2cc", desc: "Key decisions, constraints, or requirements that must drive the work" },
+    reference: { label: "Reference",  color: "#0052cc", bg: "#e6f0ff", border: "#c8d9f5", desc: "Useful context that informs decisions but isn't binding" },
+    knowledge: { label: "Knowledge",  color: "#6b778c", bg: "#f1f2f4", border: "#dfe1e6", desc: "Background reading — good to know but low-action value" },
+  };
 
   const readAsBase64 = (file) => new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -5245,19 +5253,29 @@ function DiscoveryDocuments({ project, update }) {
     reader.readAsText(file);
   });
 
-  const handleFile = async (file) => {
+  const pickFile = (file) => {
     const ext = "." + file.name.split(".").pop().toLowerCase();
-    if (!ACCEPTED.includes(ext)) {
-      alert("Unsupported file type. Please upload a PDF, TXT, MD, or CSV file.");
-      return;
-    }
+    if (!ACCEPTED.includes(ext)) { alert("Unsupported file type. Please upload a PDF, TXT, MD, or CSV file."); return; }
     if (docs.some(d => d.filename === file.name)) {
       if (!window.confirm(`A document named "${file.name}" already exists. Upload anyway?`)) return;
     }
+    setDocContext({ importance: "reference", note: "" });
+    setPendingFile(file);
+  };
+
+  const handleFile = async (file, importance, note) => {
+    setPendingFile(null);
     setProcessing(true);
     try {
+      const ext = "." + file.name.split(".").pop().toLowerCase();
       const isPDF = ext === ".pdf";
-      const prompt = `You are analyzing a document for a product discovery project.\n\nProject: ${project.name}\nIndustry: ${project.industry}\nClient type: ${project.clientType || "startup"}\nFile: ${file.name}\n\nExtract discovery insights. Return ONLY valid JSON:\n{\n  "title": "document title (infer from content)",\n  "summary": "2-3 sentence description of what this document is",\n  "context": "Key background info, decisions, or requirements relevant to this project (100-200 words)",\n  "risks": [{"text": "specific risk", "source": "${file.name}"}],\n  "opportunities": [{"text": "specific opportunity", "source": "${file.name}"}],\n  "assumptions": ["assumption string"]\n}`;
+      const userNote = note.trim() ? `\nUser context: "${note.trim()}"` : "";
+      const importanceNote = importance === "critical"
+        ? "\nThis is a CRITICAL document — extract all constraints, decisions, and blockers with high priority."
+        : importance === "knowledge"
+        ? "\nThis is a background/knowledge document — focus on useful context; fewer hard risks expected."
+        : "";
+      const prompt = `You are analyzing a document for a product discovery project.\n\nProject: ${project.name}\nIndustry: ${project.industry}\nClient type: ${project.clientType || "startup"}\nFile: ${file.name}${userNote}${importanceNote}\n\nExtract discovery insights. Return ONLY valid JSON:\n{\n  "title": "document title (infer from content)",\n  "summary": "2-3 sentence description of what this document is",\n  "context": "Key background info, decisions, or requirements relevant to this project (100-200 words)",\n  "risks": [{"text": "specific risk", "source": "${file.name}"}],\n  "opportunities": [{"text": "specific opportunity", "source": "${file.name}"}],\n  "assumptions": ["assumption string"]\n}`;
 
       let msgContent;
       if (isPDF) {
@@ -5292,6 +5310,8 @@ function DiscoveryDocuments({ project, update }) {
         title: parsed.title || file.name,
         summary: parsed.summary || "",
         context: parsed.context || "",
+        userNote: note.trim(),
+        importance,
         uploadedAt: new Date().toISOString().split("T")[0],
         risksAdded: (parsed.risks || []).length,
         oppsAdded: (parsed.opportunities || []).length,
@@ -5316,7 +5336,7 @@ function DiscoveryDocuments({ project, update }) {
     e.preventDefault();
     setDragOver(false);
     const file = e.dataTransfer.files[0];
-    if (file) handleFile(file);
+    if (file) pickFile(file);
   };
 
   const deleteDoc = (id) => {
@@ -5327,6 +5347,47 @@ function DiscoveryDocuments({ project, update }) {
 
   return (
     <div>
+      {pendingFile && (
+        <Modal title="Before we process this document" onClose={() => setPendingFile(null)}
+          footer={
+            <>
+              <button className="btn btn-ghost" onClick={() => setPendingFile(null)}>Cancel</button>
+              <button className="btn btn-primary" onClick={() => handleFile(pendingFile, docContext.importance, docContext.note)}>
+                <Upload size={13} /> Process Document
+              </button>
+            </>
+          }>
+          <div style={{ background: "#f8f9fa", border: "1px solid #dfe1e6", borderRadius: 8, padding: "10px 14px", marginBottom: 16, display: "flex", alignItems: "center", gap: 10 }}>
+            <FileText size={16} color="#6b778c" />
+            <span style={{ fontSize: 13, color: "#344563", fontWeight: 500 }}>{pendingFile.name}</span>
+          </div>
+
+          <div className="field">
+            <label>Document Importance</label>
+            <div style={{ display: "flex", gap: 8 }}>
+              {Object.entries(IMPORTANCE).map(([key, val]) => (
+                <button key={key} onClick={() => setDocContext(c => ({ ...c, importance: key }))}
+                  style={{ flex: 1, padding: "10px 8px", borderRadius: 8, border: `2px solid ${docContext.importance === key ? val.color : val.border}`, background: docContext.importance === key ? val.bg : "#fff", cursor: "pointer", textAlign: "center", transition: "all .12s", fontFamily: "'DM Sans',sans-serif" }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: val.color, marginBottom: 3 }}>{val.label}</div>
+                  <div style={{ fontSize: 10, color: "#6b778c", lineHeight: 1.4 }}>{val.desc}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="field">
+            <label>Context <span style={{ fontWeight: 400, color: "#97a0af" }}>(optional)</span></label>
+            <textarea
+              value={docContext.note}
+              onChange={e => setDocContext(c => ({ ...c, note: e.target.value }))}
+              placeholder="What is this document? Why does it matter? Anything the AI should pay attention to?"
+              rows={3}
+              autoFocus
+            />
+          </div>
+        </Modal>
+      )}
+
       <div className="sec-head">
         <div>
           <div className="sec-title">Research Docs</div>
@@ -5344,7 +5405,7 @@ function DiscoveryDocuments({ project, update }) {
         onDragOver={e => { e.preventDefault(); setDragOver(true); }}
         onDragLeave={() => setDragOver(false)}
         onDrop={onDrop}
-        onClick={() => !processing && fileInputRef.current?.click()}
+        onClick={() => !processing && !pendingFile && fileInputRef.current?.click()}
         style={{
           border: `2px dashed ${dragOver ? "#e8c547" : "#dfe1e6"}`,
           borderRadius: 10, padding: processing ? "28px 24px" : "32px 24px",
@@ -5370,7 +5431,7 @@ function DiscoveryDocuments({ project, update }) {
           </div>
         )}
         <input ref={fileInputRef} type="file" accept=".pdf,.txt,.md,.csv" style={{ display: "none" }}
-          onChange={e => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }} />
+          onChange={e => { const f = e.target.files?.[0]; if (f) pickFile(f); e.target.value = ""; }} />
       </div>
 
       {/* Document list */}
@@ -5397,8 +5458,18 @@ function DiscoveryDocuments({ project, update }) {
               <FileText size={16} color="#6b778c" />
             </div>
             <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontWeight: 600, fontSize: 13, color: "#172b4d", marginBottom: 2 }}>{doc.title}</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
+                <div style={{ fontWeight: 600, fontSize: 13, color: "#172b4d" }}>{doc.title}</div>
+                {doc.importance && IMPORTANCE[doc.importance] && (
+                  <span style={{ fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono',monospace", padding: "1px 7px", borderRadius: 4, background: IMPORTANCE[doc.importance].bg, color: IMPORTANCE[doc.importance].color, flexShrink: 0 }}>
+                    {IMPORTANCE[doc.importance].label}
+                  </span>
+                )}
+              </div>
               <div style={{ fontSize: 11, color: "#97a0af", marginBottom: 6 }}>{doc.filename} · {doc.uploadedAt}</div>
+              {doc.userNote && (
+                <div style={{ fontSize: 11, color: "#505f79", fontStyle: "italic", marginBottom: 6, lineHeight: 1.5 }}>"{doc.userNote}"</div>
+              )}
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {doc.risksAdded > 0 && <span style={{ fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono',monospace", padding: "1px 7px", borderRadius: 4, background: "#ffebe6", color: "#de350b" }}>{doc.risksAdded} risk{doc.risksAdded > 1 ? "s" : ""}</span>}
                 {doc.oppsAdded > 0 && <span style={{ fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono',monospace", padding: "1px 7px", borderRadius: 4, background: "#e3fcef", color: "#00632b" }}>{doc.oppsAdded} opp{doc.oppsAdded > 1 ? "s" : ""}</span>}
@@ -5416,7 +5487,7 @@ function DiscoveryDocuments({ project, update }) {
           {expanded === doc.id && (
             <div style={{ marginTop: 14, paddingTop: 14, borderTop: "1px solid #ebecf0" }}>
               {doc.summary && (
-                <div style={{ fontSize: 12, color: "#505f79", lineHeight: 1.65, marginBottom: doc.context ? 10 : 0, fontStyle: "italic" }}>{doc.summary}</div>
+                <div style={{ fontSize: 12, color: "#505f79", lineHeight: 1.65, marginBottom: 10, fontStyle: "italic" }}>{doc.summary}</div>
               )}
               {doc.context && (
                 <div style={{ fontSize: 12, color: "#344563", lineHeight: 1.7, background: "#f8f9fa", borderRadius: 8, padding: "10px 14px" }}>{doc.context}</div>
