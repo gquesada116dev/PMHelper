@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { supabase } from "./lib/supabase";
+import ReactMarkdown from "react-markdown";
 import {
   LayoutDashboard, Users, User, Layers, BookOpen, Bug, Palette,
   UserCheck, Calendar, Bot, Plus, ChevronDown, X, Sparkles, Send,
@@ -731,6 +732,18 @@ textarea{resize:vertical;min-height:70px}
 .dot-red{width:7px;height:7px;border-radius:50%;background:#de350b;flex-shrink:0}
 .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 @media(max-width:700px){.two-col{grid-template-columns:1fr}.sbar{display:none}.stat-grid{grid-template-columns:1fr 1fr}}
+.md-agenda{font-size:13px;color:#344563;line-height:1.8}
+.md-agenda h1,.md-agenda h2{font-family:'Syne',sans-serif;font-weight:700;color:#172b4d;margin:18px 0 8px}
+.md-agenda h1{font-size:17px}
+.md-agenda h2{font-size:14px;border-bottom:1px solid #ebecf0;padding-bottom:5px}
+.md-agenda h3{font-size:13px;font-weight:600;color:#0052cc;margin:14px 0 5px}
+.md-agenda p{margin:0 0 8px}
+.md-agenda ul,.md-agenda ol{padding-left:20px;margin:0 0 10px}
+.md-agenda li{margin-bottom:4px}
+.md-agenda strong{color:#172b4d;font-weight:600}
+.md-agenda em{color:#5e6c84;font-style:italic}
+.md-agenda hr{border:none;border-top:1px solid #ebecf0;margin:14px 0}
+.md-agenda code{background:#f4f5f7;border-radius:3px;padding:1px 5px;font-family:'DM Mono',monospace;font-size:12px}
 `;
 
 // ─── Shared UI ────────────────────────────────────────────────────────────────
@@ -4134,7 +4147,9 @@ function DiscoveryMeetingPrep({ project, update }) {
               <button className="btn btn-ai btn-sm" onClick={generateAgenda}><Sparkles size={12} /> Regenerate</button>
             </div>
           </div>
-          <pre style={{ fontSize: 13, color: "#344563", whiteSpace: "pre-wrap", lineHeight: 1.8, fontFamily: "'DM Sans',sans-serif" }}>{agenda}</pre>
+          <div className="md-agenda">
+            <ReactMarkdown>{agenda}</ReactMarkdown>
+          </div>
         </div>
       )}
 
