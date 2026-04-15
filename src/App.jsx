@@ -6057,6 +6057,15 @@ function WireframePrototype({ projectContext, data = {}, onSave, defaultScreens 
 
   const isMobile = /(mobile|app|ios|android)/i.test(projectContext.platform || "");
 
+  // Use a Blob URL so inline scripts in the prototype aren't blocked by CSP
+  const [blobUrl, setBlobUrl] = useState(null);
+  useEffect(() => {
+    if (!html) { setBlobUrl(null); return; }
+    const url = URL.createObjectURL(new Blob([html], { type: "text/html" }));
+    setBlobUrl(url);
+    return () => URL.revokeObjectURL(url);
+  }, [html]);
+
   const buildPrompt = (extra = "") => {
     const list = screens.map((s, i) => `  ${i + 1}. "${s.name}"${s.description ? ` — ${s.description}` : ""}`).join("\n");
     return `Generate a complete, self-contained HTML lo-fi wireframe prototype.
@@ -6230,7 +6239,7 @@ Return ONLY the complete HTML document. No markdown fences. No explanation. Begi
                 {projectContext.name} — Lo-fi Prototype
               </div>
             </div>
-            <iframe srcDoc={html} style={{ width: "100%", height: isMobile ? 780 : 640, border: "none", display: "block" }} title="Wireframe prototype" />
+            <iframe src={blobUrl} style={{ width: "100%", height: isMobile ? 780 : 640, border: "none", display: "block" }} title="Wireframe prototype" />
           </div>
 
           <div className="card" style={{ padding: 14 }}>
