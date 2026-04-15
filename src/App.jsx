@@ -866,7 +866,6 @@ export default function App() {
     "d-storymap": <StoryMappingSection project={project} update={update} />,
     "d-planning": <DiscoveryPlanning project={project} update={update} />,
     "d-design": <DiscoveryDesign project={project} update={update} />,
-    "d-wireframes": <WireframePrototype project={project} update={update} storageKey="wireframe" />,
     "d-team": <TeamEstimation project={project} update={update} />,
     "d-presentation": <DiscoveryPresentation project={project} update={update}
       onGraduate={() => setShowGraduation(true)} />,
@@ -948,7 +947,6 @@ function Sidebar({ projects, pid, setPid, section, setSection, onNew, jiraConnec
     { id: "d-storymap", label: "Story Mapping", Icon: Map, section: "MAPPING" },
     { id: "d-planning", label: "Tech Planning", Icon: Cpu, section: "PLANNING" },
     { id: "d-design", label: "Design Planning", Icon: Palette, section: null },
-    { id: "d-wireframes", label: "Prototype", Icon: Layers, section: null },
     { id: "d-team", label: "Team & Estimation", Icon: BarChart2, section: "DELIVERY" },
     { id: "d-presentation", label: "Client Presentation", Icon: Presentation, section: null },
     { id: "d-ai", label: "AI Colleague", Icon: Bot, section: null },
@@ -2397,8 +2395,8 @@ Generate immediately from a clear description. Only ask ONE short question if so
 
 // ─── Design Tasks ─────────────────────────────────────────────────────────────
 function DesignSection({ project, update }) {
-  const [tab, setTab] = useState("tasks");
   const [modal, setModal] = useState(null);
+  const [protoTask, setProtoTask] = useState(null); // design task being prototyped
   const blank = { title: "", epicId: project.epics[0]?.id || "", desc: "", objective: "", scenarios: "", deliverables: "", links: "" };
   const [form, setForm] = useState(blank);
   const [convo, setConvo] = useState([]);
@@ -2452,29 +2450,10 @@ Generate immediately from a good description. Only ask ONE question if truly unc
   return (
     <div>
       <div className="sec-head">
-        <div>
-          <div className="sec-title">Design</div>
-          <div className="sec-sub">{tab === "tasks" ? `${project.design.length} task${project.design.length !== 1 ? "s" : ""}` : "Lo-fi interactive prototype"}</div>
-        </div>
-        {tab === "tasks" && (
-          <button className="btn btn-primary" onClick={() => { setForm(blank); setConvo([]); setConvoInput(""); setConvoStep("idle"); setModal("ai"); }}><Plus size={13} /> New Design Task</button>
-        )}
+        <div><div className="sec-title">Design Tasks</div><div className="sec-sub">{project.design.length} task{project.design.length !== 1 ? "s" : ""}</div></div>
+        <button className="btn btn-primary" onClick={() => { setForm(blank); setConvo([]); setConvoInput(""); setConvoStep("idle"); setModal("ai"); }}><Plus size={13} /> New Design Task</button>
       </div>
 
-      {/* Tab bar */}
-      <div style={{ display: "flex", gap: 8, marginBottom: 20 }}>
-        {[["tasks", "Tasks"], ["prototype", "Prototype"]].map(([v, lbl]) => (
-          <button key={v} onClick={() => setTab(v)}
-            style={{ padding: "6px 18px", borderRadius: 20, border: "none", cursor: "pointer", fontSize: 13, fontWeight: 600, transition: "all .15s",
-              background: tab === v ? "#172b4d" : "#f1f2f4", color: tab === v ? "#fff" : "#505f79" }}>
-            {lbl}
-          </button>
-        ))}
-      </div>
-
-      {tab === "prototype" && <WireframePrototype project={project} update={update} storageKey="wireframe" />}
-
-      {tab === "tasks" && (<>
       {project.design.length === 0 ? (
         <Empty icon={<Palette size={36} />} title="No design tasks" sub="Describe what you need — AI generates a concise brief for the design team"
           action={<button className="btn btn-primary" onClick={() => { setForm(blank); setConvo([]); setConvoInput(""); setConvoStep("idle"); setModal("ai"); }}><Plus size={13} /> New Design Task</button>} />
@@ -2485,11 +2464,32 @@ Generate immediately from a good description. Only ask ONE question if truly unc
             <span className="tag tag-Design" style={{ flexShrink: 0 }}>Design</span>
             <span style={{ flex: 1, fontSize: 13, color: "#344563", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.title}</span>
             <span className="tag tag-muted" style={{ fontSize: 10, flexShrink: 0 }}>{epicOf(d.epicId)}</span>
+            <button className="btn btn-ghost btn-sm" onClick={() => setProtoTask(d)} title="Lo-fi prototype for this task">
+              <Layers size={12} /> {d.wireframe?.html ? "Prototype" : "Prototype"}
+            </button>
             <button className="icon-btn" onClick={() => { setForm(d); setConvo([]); setConvoStep("idle"); setModal("form"); }}><Edit2 size={13} /></button>
             <button className="icon-btn" onClick={() => del(d.id)}><Trash2 size={13} /></button>
           </div>
         ))
-      )}</>)
+      )}
+
+      {protoTask && (
+        <Modal wide title={`Prototype — ${protoTask.title}`} onClose={() => setProtoTask(null)}>
+          <WireframePrototype
+            projectContext={project}
+            data={protoTask.wireframe || {}}
+            onSave={(d) => {
+              const updated = project.design.map(t => t.id === protoTask.id ? { ...t, wireframe: d } : t);
+              update({ design: updated });
+              setProtoTask(pt => ({ ...pt, wireframe: d }));
+            }}
+            defaultScreens={[
+              { id: uid(), name: protoTask.title.replace(/^\[Design\]\s*/i, ""), description: protoTask.desc || protoTask.objective || "" },
+              ...(protoTask.scenarios ? [{ id: uid(), name: "Key Scenario", description: protoTask.scenarios.slice(0, 120) }] : []),
+            ]}
+          />
+        </Modal>
+      )}
 
       {/* AI chat creation */}
       {modal === "ai" && (
@@ -6045,34 +6045,26 @@ function DiscoveryPlanning({ project, update }) {
 }
 
 // ─── Wireframe Prototype ──────────────────────────────────────────────────────
-function WireframePrototype({ project, update, storageKey = "wireframe" }) {
-  const stored = project[storageKey] || {};
-  const [screens, setScreens] = useState(() => {
-    if (stored.screens?.length) return stored.screens;
-    return (project.backbone || []).flatMap(stage =>
-      (stage.epics || []).map(epic => ({
-        id: uid(), name: epic.title,
-        description: `${stage.stage} — ${(epic.features || []).slice(0, 3).map(f => f.title || f).join(", ")}`,
-      }))
-    ).slice(0, 12);
-  });
-  const [html, setHtml] = useState(stored.html || "");
+// data = { screens, html, lastGenerated }  |  onSave(data)  |  projectContext = full project for backbone/platform/etc.
+function WireframePrototype({ projectContext, data = {}, onSave, defaultScreens = [] }) {
+  const [screens, setScreens] = useState(() => data.screens?.length ? data.screens : defaultScreens);
+  const [html, setHtml] = useState(data.html || "");
   const [generating, setGenerating] = useState(false);
   const [iterPrompt, setIterPrompt] = useState("");
   const [iterating, setIterating] = useState(false);
-  const [view, setView] = useState(stored.html ? "preview" : "define");
+  const [view, setView] = useState(data.html ? "preview" : "define");
   const [editingScreen, setEditingScreen] = useState(null);
 
-  const isMobile = /(mobile|app|ios|android)/i.test(project.platform || "");
+  const isMobile = /(mobile|app|ios|android)/i.test(projectContext.platform || "");
 
   const buildPrompt = (extra = "") => {
     const list = screens.map((s, i) => `  ${i + 1}. "${s.name}"${s.description ? ` — ${s.description}` : ""}`).join("\n");
     return `Generate a complete, self-contained HTML lo-fi wireframe prototype.
 
-PROJECT: ${project.name}
-About: ${project.about || ""}
-Platform: ${project.platform || "web"} ${isMobile ? "(mobile — max-width 390px, centered)" : "(desktop — full width)"}
-Industry: ${project.industry || ""}
+PROJECT: ${projectContext.name}
+About: ${projectContext.about || ""}
+Platform: ${projectContext.platform || "web"} ${isMobile ? "(mobile — max-width 390px, centered)" : "(desktop — full width)"}
+Industry: ${projectContext.industry || ""}
 ${extra ? `\nCHANGE REQUEST: ${extra}\n` : ""}
 SCREENS:
 ${list}
@@ -6083,7 +6075,7 @@ REQUIREMENTS:
 - ${isMobile ? "Center content at max-width:390px with a phone-style chrome border" : "Full-width desktop with proper top nav or sidebar as appropriate"}
 - Each screen: <div class="screen" id="screen-SLUG"> — only one visible at a time
 - Every clickable element (buttons, links, nav items) MUST call showScreen('screen-SLUG') — nothing should be a dead end
-- Fixed breadcrumb bar at top: project name + current screen name + back button
+- Fixed breadcrumb bar at top showing current screen name + back button
 - Placeholder images: <div style="background:#ddd;border-radius:6px;display:flex;align-items:center;justify-content:center;color:#999;font-size:12px">Image</div>
 - Realistic placeholder text (not Lorem Ipsum) — make it feel like the real product
 - Include a simple screen switcher footer so testers can jump to any screen
@@ -6092,8 +6084,8 @@ REQUIREMENTS:
 Return ONLY the complete HTML document. No markdown fences. No explanation. Begin with <!DOCTYPE html>.`;
   };
 
-  const persistHtml = (newHtml, newScreens) => {
-    update({ [storageKey]: { screens: newScreens || screens, html: newHtml, lastGenerated: new Date().toISOString().split("T")[0] } });
+  const persist = (newHtml, newScreens) => {
+    onSave({ screens: newScreens || screens, html: newHtml, lastGenerated: new Date().toISOString().split("T")[0] });
   };
 
   const generate = async () => {
@@ -6104,7 +6096,7 @@ Return ONLY the complete HTML document. No markdown fences. No explanation. Begi
     setGenerating(false);
     const clean = reply.replace(/^```html?\s*/i, "").replace(/\n?```\s*$/, "").trim();
     setHtml(clean);
-    persistHtml(clean);
+    persist(clean);
     setView("preview");
   };
 
@@ -6117,13 +6109,13 @@ Return ONLY the complete HTML document. No markdown fences. No explanation. Begi
     setIterating(false);
     const clean = reply.replace(/^```html?\s*/i, "").replace(/\n?```\s*$/, "").trim();
     setHtml(clean);
-    persistHtml(clean);
+    persist(clean);
     setIterPrompt("");
   };
 
   const download = () => {
     const blob = new Blob([html], { type: "text/html" });
-    const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: `${(project.name || "wireframe").replace(/\s+/g, "-").toLowerCase()}-prototype.html` });
+    const a = Object.assign(document.createElement("a"), { href: URL.createObjectURL(blob), download: `${(projectContext.name || "wireframe").replace(/\s+/g, "-").toLowerCase()}-prototype.html` });
     a.click();
     URL.revokeObjectURL(a.href);
   };
@@ -6131,6 +6123,16 @@ Return ONLY the complete HTML document. No markdown fences. No explanation. Begi
   const openExternal = () => {
     const blob = new Blob([html], { type: "text/html" });
     window.open(URL.createObjectURL(blob), "_blank");
+  };
+
+  const importFromBackbone = () => {
+    const auto = (projectContext.backbone || []).flatMap(stage =>
+      (stage.epics || []).map(epic => ({
+        id: uid(), name: epic.title,
+        description: `${stage.stage} — ${(epic.features || []).slice(0, 3).map(f => f.title || f).join(", ")}`,
+      }))
+    ).slice(0, 12);
+    if (auto.length) setScreens(auto);
   };
 
   return (
@@ -6144,28 +6146,17 @@ Return ONLY the complete HTML document. No markdown fences. No explanation. Begi
             {lbl}
           </button>
         ))}
-        {html && <span style={{ marginLeft: "auto", fontSize: 11, color: "#97a0af", alignSelf: "center" }}>Last generated: {stored.lastGenerated || "today"}</span>}
+        {data.lastGenerated && <span style={{ marginLeft: "auto", fontSize: 11, color: "#97a0af", alignSelf: "center" }}>Last generated: {data.lastGenerated}</span>}
       </div>
 
       {/* ── DEFINE SCREENS ── */}
       {view === "define" && (
         <div>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-            <div style={{ fontSize: 13, color: "#6b778c", lineHeight: 1.5 }}>
-              Define the screens to prototype. Order matters — screen 1 is the entry point.<br />
-              <span style={{ fontSize: 12, color: "#97a0af" }}>Tip: import from your story map or add manually.</span>
-            </div>
+            <div style={{ fontSize: 13, color: "#6b778c" }}>Define screens to include. Screen 1 is the entry point.</div>
             <div style={{ display: "flex", gap: 8 }}>
-              {(project.backbone || []).length > 0 && (
-                <button className="btn btn-ghost btn-sm" onClick={() => {
-                  const auto = (project.backbone || []).flatMap(stage =>
-                    (stage.epics || []).map(epic => ({
-                      id: uid(), name: epic.title,
-                      description: `${stage.stage} — ${(epic.features || []).slice(0, 3).map(f => f.title || f).join(", ")}`,
-                    }))
-                  ).slice(0, 12);
-                  if (auto.length) setScreens(auto);
-                }}><Sparkles size={12} /> Import from Story Map</button>
+              {(projectContext.backbone || []).length > 0 && (
+                <button className="btn btn-ghost btn-sm" onClick={importFromBackbone}><Sparkles size={12} /> Import from Story Map</button>
               )}
               <button className="btn btn-ghost btn-sm" onClick={() => setScreens(s => [...s, { id: uid(), name: "New Screen", description: "" }])}>
                 <Plus size={12} /> Add Screen
@@ -6173,10 +6164,7 @@ Return ONLY the complete HTML document. No markdown fences. No explanation. Begi
             </div>
           </div>
 
-          {screens.length === 0 && (
-            <Empty icon={<Layers size={36} />} title="No screens defined"
-              sub="Add screens manually or import from your story map backbone" />
-          )}
+          {screens.length === 0 && <Empty icon={<Layers size={36} />} title="No screens defined" sub="Add screens manually or import from your story map backbone" />}
 
           {screens.map((s, idx) => (
             <div key={s.id} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 14px", background: "#fff", border: "1px solid #dfe1e6", borderRadius: 8, marginBottom: 6 }}>
@@ -6186,7 +6174,7 @@ Return ONLY the complete HTML document. No markdown fences. No explanation. Begi
                   <input value={editingScreen.name} onChange={e => setEditingScreen(es => ({ ...es, name: e.target.value }))} autoFocus
                     style={{ width: "100%", fontSize: 13, fontWeight: 600, padding: "4px 8px", border: "1px solid #c1c7d0", borderRadius: 4, marginBottom: 4, boxSizing: "border-box" }} />
                   <input value={editingScreen.description} onChange={e => setEditingScreen(es => ({ ...es, description: e.target.value }))}
-                    placeholder="Brief description — what does this screen do?" style={{ width: "100%", fontSize: 12, padding: "4px 8px", border: "1px solid #c1c7d0", borderRadius: 4, boxSizing: "border-box" }} />
+                    placeholder="What does this screen do?" style={{ width: "100%", fontSize: 12, padding: "4px 8px", border: "1px solid #c1c7d0", borderRadius: 4, boxSizing: "border-box" }} />
                   <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
                     <button className="btn btn-primary btn-sm" onClick={() => { setScreens(ss => ss.map(x => x.id === editingScreen.id ? editingScreen : x)); setEditingScreen(null); }}>Save</button>
                     <button className="btn btn-ghost btn-sm" onClick={() => setEditingScreen(null)}>Cancel</button>
@@ -6233,27 +6221,25 @@ Return ONLY the complete HTML document. No markdown fences. No explanation. Begi
             </div>
           </div>
 
-          {/* Browser chrome + iframe */}
           <div style={{ border: "1px solid #dfe1e6", borderRadius: 10, overflow: "hidden", marginBottom: 16 }}>
             <div style={{ padding: "8px 12px", background: "#f8f9fa", borderBottom: "1px solid #dfe1e6", display: "flex", gap: 6, alignItems: "center" }}>
               <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#ff5f57" }} />
               <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#febc2e" }} />
               <div style={{ width: 10, height: 10, borderRadius: "50%", background: "#28c840" }} />
               <div style={{ flex: 1, background: "#e8eaed", borderRadius: 4, padding: "2px 12px", fontSize: 11, color: "#5f6368", marginLeft: 8, fontFamily: "monospace" }}>
-                {project.name} — Lo-fi Prototype
+                {projectContext.name} — Lo-fi Prototype
               </div>
             </div>
             <iframe srcDoc={html} style={{ width: "100%", height: isMobile ? 780 : 640, border: "none", display: "block" }} title="Wireframe prototype" />
           </div>
 
-          {/* Iteration */}
           <div className="card" style={{ padding: 14 }}>
             <div style={{ fontSize: 12, fontWeight: 700, color: "#172b4d", marginBottom: 4 }}>Iterate</div>
             <div style={{ fontSize: 12, color: "#6b778c", marginBottom: 10 }}>Describe a change and Claude will update the prototype in place.</div>
             <div style={{ display: "flex", gap: 8 }}>
               <input value={iterPrompt} onChange={e => setIterPrompt(e.target.value)}
                 onKeyDown={e => e.key === "Enter" && iterate()}
-                placeholder='e.g. "Add a sidebar to dashboard", "Show empty state on the list screen", "Add a settings page"'
+                placeholder='e.g. "Add a sidebar to dashboard", "Show empty state on the list", "Add a settings screen"'
                 style={{ flex: 1, fontSize: 13 }} disabled={iterating} />
               <button className="btn btn-ai" onClick={iterate} disabled={iterating || !iterPrompt.trim()} style={{ flexShrink: 0 }}>
                 {iterating ? "Updating…" : <><Sparkles size={13} /> Apply</>}
@@ -6269,6 +6255,7 @@ Return ONLY the complete HTML document. No markdown fences. No explanation. Begi
 // ─── Discovery Design Planning ─────────────────────────────────────────────────
 function DiscoveryDesign({ project, update }) {
   const [generating, setGenerating] = useState(false);
+  const [showProto, setShowProto] = useState(false);
 
   const generate = async () => {
     setGenerating(true);
@@ -6286,8 +6273,27 @@ function DiscoveryDesign({ project, update }) {
     <div>
       <div className="sec-head">
         <div><div className="sec-title">Design Planning</div><div className="sec-sub">Research plan, design priorities, and next steps for the design team</div></div>
-        <button className="btn btn-ai" onClick={generate} disabled={generating}>{generating ? "Generating..." : <><Sparkles size={13} /> AI Generate</>}</button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn btn-ghost" onClick={() => setShowProto(true)}><Layers size={13} /> Prototype</button>
+          <button className="btn btn-ai" onClick={generate} disabled={generating}>{generating ? "Generating..." : <><Sparkles size={13} /> AI Generate</>}</button>
+        </div>
       </div>
+
+      {showProto && (
+        <Modal wide title="Lo-fi Prototype" onClose={() => setShowProto(false)}>
+          <WireframePrototype
+            projectContext={project}
+            data={project.wireframe || {}}
+            onSave={(d) => update({ wireframe: d })}
+            defaultScreens={(project.backbone || []).flatMap(stage =>
+              (stage.epics || []).map(epic => ({
+                id: uid(), name: epic.title,
+                description: `${stage.stage} — ${(epic.features || []).slice(0, 3).map(f => f.title || f).join(", ")}`,
+              }))
+            ).slice(0, 12)}
+          />
+        </Modal>
+      )}
 
       <div className="card" style={{ marginBottom: 16 }}>
         <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12 }}>
