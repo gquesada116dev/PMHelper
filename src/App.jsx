@@ -863,20 +863,32 @@ export default function App() {
   const [showGraduation, setShowGraduation] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Auth: check session once, then listen for changes
+  const projectsLoaded = useRef(false);
+
+  // Auth: check session once, then listen for sign-in/sign-out only
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       setUser(session?.user ?? null);
       setAuthLoading(false);
     });
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-      setUser(session?.user ?? null);
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      // TOKEN_REFRESHED fires every time the tab regains focus — ignore it
+      // to prevent re-loading projects and wiping in-progress state
+      if (event === "SIGNED_IN") setUser(session?.user ?? null);
+      if (event === "SIGNED_OUT") {
+        setUser(null);
+        projectsLoaded.current = false;
+        setProjects([]);
+        setPid(null);
+        setLoading(true);
+      }
     });
     return () => subscription.unsubscribe();
   }, []);
 
   useEffect(() => {
-    if (!user) return; // only load projects when logged in
+    if (!user || projectsLoaded.current) return;
+    projectsLoaded.current = true;
     (async () => {
       const { data, error } = await supabase
         .from("projects")
