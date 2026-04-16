@@ -6865,7 +6865,7 @@ function DiscoveryDesign({ project, update }) {
 // ─── Team Estimation ───────────────────────────────────────────────────────────
 function TeamEstimation({ project, update }) {
   const [generating, setGenerating] = useState(false);
-  const [editingScenario, setEditingScenario] = useState(null);
+  const [editingScenario, setEditingScenario] = useState(null); // { key, data }
   const scenarios = project.scenarios || null;
 
   const generateScenarios = async () => {
@@ -6878,14 +6878,24 @@ function TeamEstimation({ project, update }) {
     if (parsed) update({ scenarios: parsed });
   };
 
+  const saveScenario = () => {
+    if (!editingScenario) return;
+    update({ scenarios: { ...scenarios, [editingScenario.key]: editingScenario.data } });
+    setEditingScenario(null);
+  };
+
   const formatCost = n => n ? "$" + Number(n).toLocaleString() : "—";
 
-  const ScenarioCard = ({ key: k, data, color, label }) => {
+  const ScenarioCard = ({ scenarioKey, data, color, label }) => {
     if (!data) return null;
     const total = (data.roles || []).reduce((a, r) => a + (r.monthly * r.fte), 0);
     return (
       <div className="card" style={{ borderTop: "3px solid " + color }}>
-        <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 15, color: "#172b4d", marginBottom: 4 }}>{data.name || label}</div>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 4 }}>
+          <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 15, color: "#172b4d" }}>{data.name || label}</div>
+          <button className="btn btn-ghost btn-xs" onClick={() => setEditingScenario({ key: scenarioKey, data: JSON.parse(JSON.stringify(data)) })}
+            style={{ flexShrink: 0 }}><Edit2 size={11} /> Edit</button>
+        </div>
         <div style={{ fontSize: 12, color: "#6b778c", marginBottom: 14, lineHeight: 1.5 }}>{data.description}</div>
 
         <div style={{ display: "flex", gap: 16, marginBottom: 14 }}>
@@ -6936,6 +6946,9 @@ function TeamEstimation({ project, update }) {
       return `**${d.name}**\nTeam: ${roles}\nTimeline: ${d.mvpMonths} months to MVP\nVelocity: ${d.sprintVelocity}pt/sprint\nMonthly cost: $${total.toLocaleString()}\nTotal investment: $${(total * d.mvpMonths).toLocaleString()}\n`;
     }).join("\n") : "";
 
+  const ed = editingScenario?.data;
+  const setEd = fn => setEditingScenario(prev => ({ ...prev, data: fn(prev.data) }));
+
   return (
     <div>
       <div className="sec-head">
@@ -6961,10 +6974,90 @@ function TeamEstimation({ project, update }) {
 
       {scenarios && !generating && (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
-          <ScenarioCard k="lean" data={scenarios.lean} color="#36b37e" label="Lean" />
-          <ScenarioCard k="balanced" data={scenarios.balanced} color="#0052cc" label="Balanced" />
-          <ScenarioCard k="accelerated" data={scenarios.accelerated} color="#e8c547" label="Accelerated" />
+          <ScenarioCard scenarioKey="lean" data={scenarios.lean} color="#36b37e" label="Lean" />
+          <ScenarioCard scenarioKey="balanced" data={scenarios.balanced} color="#0052cc" label="Balanced" />
+          <ScenarioCard scenarioKey="accelerated" data={scenarios.accelerated} color="#e8c547" label="Accelerated" />
         </div>
+      )}
+
+      {/* ── Edit scenario modal ── */}
+      {editingScenario && ed && (
+        <Modal wide title={`Edit Scenario — ${ed.name}`} onClose={() => setEditingScenario(null)}
+          footer={<><button className="btn btn-ghost" onClick={() => setEditingScenario(null)}>Cancel</button><button className="btn btn-primary" onClick={saveScenario}>Save</button></>}>
+
+          {/* Name & description */}
+          <div className="row">
+            <div className="field" style={{ flex: 1 }}>
+              <label>Scenario Name</label>
+              <input value={ed.name || ""} onChange={e => setEd(d => ({ ...d, name: e.target.value }))} placeholder="e.g. Lean, On-Shore, Off-Shore…" />
+            </div>
+          </div>
+          <div className="field">
+            <label>Description</label>
+            <textarea value={ed.description || ""} onChange={e => setEd(d => ({ ...d, description: e.target.value }))} rows={2} />
+          </div>
+
+          {/* Timeline numbers */}
+          <div className="row">
+            <div className="field">
+              <label>Sprints</label>
+              <input type="number" min="1" value={ed.mvpSprints || ""} onChange={e => setEd(d => ({ ...d, mvpSprints: Number(e.target.value) }))} />
+            </div>
+            <div className="field">
+              <label>Months</label>
+              <input type="number" min="1" value={ed.mvpMonths || ""} onChange={e => setEd(d => ({ ...d, mvpMonths: Number(e.target.value) }))} />
+            </div>
+            <div className="field">
+              <label>Velocity (pt/sprint)</label>
+              <input type="number" min="1" value={ed.sprintVelocity || ""} onChange={e => setEd(d => ({ ...d, sprintVelocity: Number(e.target.value) }))} />
+            </div>
+          </div>
+
+          <div className="divider" />
+
+          {/* Roles */}
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 700, color: "#172b4d" }}>Team Roles</div>
+            <button className="btn btn-ghost btn-xs" onClick={() => setEd(d => ({ ...d, roles: [...(d.roles || []), { role: "New Role", fte: 1, monthly: 0 }] }))}>
+              <Plus size={12} /> Add Role
+            </button>
+          </div>
+
+          {/* Column headers */}
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 110px 32px", gap: 8, marginBottom: 4 }}>
+            {["Role / Label", "FTE", "Monthly Rate ($)", ""].map(h => (
+              <div key={h} style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em" }}>{h}</div>
+            ))}
+          </div>
+
+          {(ed.roles || []).map((r, i) => (
+            <div key={i} style={{ display: "grid", gridTemplateColumns: "1fr 80px 110px 32px", gap: 8, marginBottom: 6, alignItems: "center" }}>
+              <input value={r.role} onChange={e => setEd(d => ({ ...d, roles: d.roles.map((x, j) => j === i ? { ...x, role: e.target.value } : x) }))}
+                placeholder="e.g. Senior Dev (Off-Shore)" style={{ fontSize: 13 }} />
+              <input type="number" min="0.1" step="0.1" value={r.fte} onChange={e => setEd(d => ({ ...d, roles: d.roles.map((x, j) => j === i ? { ...x, fte: Number(e.target.value) } : x) }))}
+                style={{ fontSize: 13 }} />
+              <input type="number" min="0" value={r.monthly} onChange={e => setEd(d => ({ ...d, roles: d.roles.map((x, j) => j === i ? { ...x, monthly: Number(e.target.value) } : x) }))}
+                style={{ fontSize: 13 }} />
+              <button className="icon-btn" onClick={() => setEd(d => ({ ...d, roles: d.roles.filter((_, j) => j !== i) }))} title="Remove"><Trash2 size={13} /></button>
+            </div>
+          ))}
+
+          {/* Live cost summary */}
+          {ed.roles?.length > 0 && (() => {
+            const total = (ed.roles || []).reduce((a, r) => a + (r.monthly * r.fte), 0);
+            return (
+              <div style={{ background: "#f8f9fa", border: "1px solid #dfe1e6", borderRadius: 7, padding: "10px 14px", marginTop: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 13, fontWeight: 700, color: "#172b4d" }}>
+                  <span>Monthly Total</span><span>{formatCost(total)}</span>
+                </div>
+                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#6b778c", marginTop: 4 }}>
+                  <span>MVP Total ({ed.mvpMonths || "?"} mo)</span>
+                  <span style={{ fontWeight: 600, color: "#172b4d" }}>{formatCost(total * (ed.mvpMonths || 0))}</span>
+                </div>
+              </div>
+            );
+          })()}
+        </Modal>
       )}
     </div>
   );
