@@ -2400,7 +2400,9 @@ Generate ${existing > 0 ? "additional" : "comprehensive"} test cases. Return onl
     if (parsed && !Array.isArray(parsed)) {
       parsed = parsed.testCases || parsed.cases || parsed.items || parsed.data || Object.values(parsed).find(v => Array.isArray(v)) || null;
     }
-    if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("AI returned unexpected format — try again");
+    if (!Array.isArray(parsed) || parsed.length === 0) {
+      throw new Error(`Parse failed. Raw response (first 300 chars): ${reply.slice(0, 300)}`);
+    }
     return parsed.map((tc, i) => ({
       id: uid(),
       code: tc.code || `TC-${String(existing + i + 1).padStart(3, "0")}`,
