@@ -2393,15 +2393,36 @@ Return JSON array only:
 ]
 
 Generate ${existing > 0 ? "additional" : "comprehensive"} test cases. Return only the JSON array.`
-    }], "You are a senior QA engineer. Generate structured test cases. Return only a valid JSON array.", 3000);
+    }], "You are a senior QA engineer. Generate structured test cases. Return only a valid JSON array.", 4000);
     if (!reply || reply.startsWith("Error:")) throw new Error(reply || "No response from AI");
-    let parsed = parseJSON(reply);
-    // Claude sometimes wraps the array: { "testCases": [...] } or { "cases": [...] }
+
+    // Extract JSON from optional markdown fence (handle truncated responses with no closing ```)
+    let rawJson = reply.trim();
+    const fenceMatch = rawJson.match(/```(?:json)?\s*([\s\S]*?)(?:```|$)/);
+    if (fenceMatch) rawJson = fenceMatch[1].trim();
+
+    // Try full parse first
+    let parsed = null;
+    try { parsed = JSON.parse(rawJson); } catch {}
+
+    // Unwrap object wrapper: { "testCases": [...] }
     if (parsed && !Array.isArray(parsed)) {
-      parsed = parsed.testCases || parsed.cases || parsed.items || parsed.data || Object.values(parsed).find(v => Array.isArray(v)) || null;
+      parsed = parsed.testCases || parsed.cases || parsed.items || parsed.data
+        || Object.values(parsed).find(v => Array.isArray(v)) || null;
     }
+
+    // If truncated JSON (no closing bracket), salvage complete objects already parsed
+    if (!parsed) {
+      const objMatches = [...rawJson.matchAll(/\{(?:[^{}]|\{[^{}]*\})*\}/g)];
+      const complete = [];
+      for (const m of objMatches) {
+        try { complete.push(JSON.parse(m[0])); } catch {}
+      }
+      if (complete.length > 0) parsed = complete;
+    }
+
     if (!Array.isArray(parsed) || parsed.length === 0) {
-      throw new Error(`Parse failed. Raw response (first 300 chars): ${reply.slice(0, 300)}`);
+      throw new Error(`Could not parse test cases. Raw (first 200 chars): ${reply.slice(0, 200)}`);
     }
     return parsed.map((tc, i) => ({
       id: uid(),
