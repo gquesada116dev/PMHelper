@@ -1894,8 +1894,33 @@ function EpicsSection({ project, update, setSection }) {
   };
 
   const acceptStory = s => {
-    update({ stories: [...project.stories, { ...s, _accepted: undefined, _editing: undefined }] });
-    update({ epics: project.epics.map(e => e.id === storySuggestEpic.id ? { ...e, stories: e.stories + 1 } : e) });
+    const clean = { ...s };
+    delete clean._accepted;
+    delete clean._editing;
+
+    if (s.team === "Designer") {
+      // Route designer items to design tasks with the correct schema
+      const designTask = {
+        id: s.id,
+        epicId: s.epicId,
+        title: s.title.replace(/^\[Designer\]\s*/, "[Design] "),
+        desc: s.description || "",
+        objective: "",
+        scenarios: s.ac || "",
+        deliverables: "",
+        links: "",
+      };
+      update({
+        design: [...project.design, designTask],
+        epics: project.epics.map(e => e.id === storySuggestEpic.id ? { ...e, stories: e.stories + 1 } : e),
+      });
+    } else {
+      // Single update call to avoid race condition overwriting stories or epics
+      update({
+        stories: [...project.stories, clean],
+        epics: project.epics.map(e => e.id === storySuggestEpic.id ? { ...e, stories: e.stories + 1 } : e),
+      });
+    }
     setStorySuggestions(prev => prev.map(x => x.id === s.id ? { ...x, _accepted: true } : x));
   };
 
@@ -3957,12 +3982,12 @@ Rules:
 - Each story title must start with [FE], [BE], [FS], or [Mobile] based on platform (${project.platform})
 - Personas must reflect real users discovered in sessions
 - Stakeholders must reflect participants mentioned in sessions
-- Design tasks for each epic that has user-facing flows
+- Design tasks for each epic that has user-facing flows; use ONLY the fields: id, epicId, title, desc, objective, scenarios, deliverables, links — never use "description" or "ac" in designTasks
 - aiRules from architecture decisions and session outputs
 - Return ONLY the JSON object, no markdown, no explanation`;
 
     const result = await askClaude([{ role: "user", content: prompt }],
-      "You are a senior PM. Return only valid JSON. No markdown fences, no explanation.", 4000);
+      "You are a senior PM. Return only valid JSON. No markdown fences, no explanation.", 6000);
 
     let parsed = null;
     try { parsed = JSON.parse(result.trim()); } catch {}
@@ -3982,7 +4007,18 @@ Rules:
     parsed.stakeholders = (parsed.stakeholders || []).map(s => ({ ...s, id: uid() }));
     parsed.designTasks = (parsed.designTasks || []).map((d, i) => {
       const epicId = epicMap[d.epicId] || parsed.epics[i % parsed.epics.length]?.id || "";
-      return { ...d, id: uid(), epicId };
+      // Normalize: Claude sometimes returns story-format fields — remap them
+      const desc = d.desc || d.description || "";
+      const scenarios = d.scenarios || d.ac || "";
+      return {
+        id: uid(), epicId,
+        title: d.title || "",
+        desc,
+        objective: d.objective || "",
+        scenarios,
+        deliverables: d.deliverables || "",
+        links: d.links || "",
+      };
     });
 
     setGenerated(parsed);
