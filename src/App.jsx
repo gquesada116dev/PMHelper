@@ -3018,6 +3018,8 @@ function DesignSection({ project, update }) {
   const chatBottom = useRef(null);
   useEffect(() => { chatBottom.current?.scrollIntoView({ behavior: "smooth" }); }, [convo]);
 
+  const [improvingDesign, setImprovingDesign] = useState(null);
+
   const save = () => {
     if (!form.title.trim()) return;
     if (form.id) update({ design: project.design.map(d => d.id === form.id ? form : d) });
@@ -3026,6 +3028,40 @@ function DesignSection({ project, update }) {
   };
   const del = id => update({ design: project.design.filter(d => d.id !== id) });
   const epicOf = id => project.epics.find(e => e.id === id)?.title || "—";
+
+  const improveDesignTask = async (d) => {
+    setImprovingDesign(d.id);
+    const epic = project.epics.find(e => e.id === d.epicId);
+    const result = await askClaude([{
+      role: "user",
+      content: `Improve this design task brief so it is clear, actionable, and follows the standard format.
+
+Title: ${d.title}
+Epic: ${epic?.title || "unknown"}
+Description: ${d.desc || ""}
+Objective: ${d.objective || ""}
+Scenarios to Cover: ${d.scenarios || ""}
+Expected Deliverables: ${d.deliverables || ""}
+
+Standard:
+- title: "[Design] EpicName | Short screen/flow name"
+- desc: What needs to be designed in plain language — not how
+- objective: One clear sentence stating the design goal
+- scenarios: Comma-separated list of screens, states, and edge cases to cover (e.g. empty state, loading, error, mobile/desktop)
+- deliverables: Specific outputs expected (e.g. "Figma frames, responsive variants, annotations, handoff specs")
+
+Return ONLY a JSON object in a code block with keys: title, desc, objective, scenarios, deliverables. Keep epicId unchanged.`
+    }], "You are a senior PM writing design briefs. Return only valid JSON in a code block.", 1500);
+    setImprovingDesign(null);
+    const fenceMatch = result.match(/```(?:json)?\s*([\s\S]*?)```/);
+    const parsed = parseJSON(fenceMatch ? fenceMatch[1] : result);
+    if (parsed) {
+      const updated = { ...d, ...parsed, id: d.id, epicId: d.epicId };
+      update({ design: project.design.map(x => x.id === d.id ? updated : x) });
+      if (form.id === d.id) setForm(updated);
+    }
+    return parsed || null;
+  };
 
   const epicListForDesign = project.epics.map(e => "id:" + e.id + " -> \"" + e.title + "\"").join(", ");
   const DESIGN_SYSTEM = `You are a PM writing a design brief. The design team defines how to implement it — keep the brief high-level and non-prescriptive.
@@ -3079,6 +3115,12 @@ Generate immediately from a good description. Only ask ONE question if truly unc
             {false && <button className="btn btn-ghost btn-sm" onClick={() => setProtoTask(d)} title="Lo-fi prototype for this task">
               <Layers size={12} /> {d.wireframe?.html ? "Prototype" : "Prototype"}
             </button>}
+            <button className="btn btn-ai btn-xs" style={{ flexShrink: 0, padding: "3px 8px", fontSize: 11 }}
+              onClick={() => improveDesignTask(d)} disabled={improvingDesign === d.id} title="Improve with AI">
+              {improvingDesign === d.id
+                ? <><div className="ai-dot" /><div className="ai-dot" style={{ animationDelay: ".2s" }} /><div className="ai-dot" style={{ animationDelay: ".4s" }} /></>
+                : <><Sparkles size={11} /> Improve</>}
+            </button>
             <button className="icon-btn" onClick={() => { setForm(d); setConvo([]); setConvoStep("idle"); setModal("form"); }}><Edit2 size={13} /></button>
             <button className="icon-btn" onClick={() => del(d.id)}><Trash2 size={13} /></button>
           </div>
@@ -3153,6 +3195,14 @@ Generate immediately from a good description. Only ask ONE question if truly unc
       {modal === "form" && (
         <Modal wide title={form.id ? "Edit Design Task" : "Design Task Details"} onClose={() => setModal(null)}
           footer={<><button className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button><button className="btn btn-primary" onClick={save}>Save</button></>}>
+          {form.id && (
+            <button className="btn btn-ai" style={{ width: "100%", marginBottom: 16, justifyContent: "center", padding: "10px 0", fontSize: 13 }}
+              onClick={() => improveDesignTask(form)} disabled={improvingDesign === form.id}>
+              {improvingDesign === form.id
+                ? <><div className="ai-dot" /><div className="ai-dot" style={{ animationDelay: ".2s" }} /><div className="ai-dot" style={{ animationDelay: ".4s" }} /> Improving brief…</>
+                : <><Sparkles size={13} /> Improve with AI — refine brief to design standard</>}
+            </button>
+          )}
           <div className="field"><label>Title</label><input value={form.title} onChange={e => setForm(f => ({ ...f, title: e.target.value }))} /></div>
           <div className="field"><label>Epic</label><select value={form.epicId} onChange={e => setForm(f => ({ ...f, epicId: e.target.value }))}>{project.epics.map(e => <option key={e.id} value={e.id}>{e.title}</option>)}<option value="">— None</option></select></div>
           <div className="field"><label>Description</label><textarea value={form.desc} onChange={e => setForm(f => ({ ...f, desc: e.target.value }))} /></div>
