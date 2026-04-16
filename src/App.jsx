@@ -2395,8 +2395,12 @@ Return JSON array only:
 Generate ${existing > 0 ? "additional" : "comprehensive"} test cases. Return only the JSON array.`
     }], "You are a senior QA engineer. Generate structured test cases. Return only a valid JSON array.", 3000);
     if (!reply || reply.startsWith("Error:")) throw new Error(reply || "No response from AI");
-    const parsed = parseJSON(reply);
-    if (!Array.isArray(parsed)) throw new Error("AI returned unexpected format — try again");
+    let parsed = parseJSON(reply);
+    // Claude sometimes wraps the array: { "testCases": [...] } or { "cases": [...] }
+    if (parsed && !Array.isArray(parsed)) {
+      parsed = parsed.testCases || parsed.cases || parsed.items || parsed.data || Object.values(parsed).find(v => Array.isArray(v)) || null;
+    }
+    if (!Array.isArray(parsed) || parsed.length === 0) throw new Error("AI returned unexpected format — try again");
     return parsed.map((tc, i) => ({
       id: uid(),
       code: tc.code || `TC-${String(existing + i + 1).padStart(3, "0")}`,
