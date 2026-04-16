@@ -857,7 +857,9 @@ export default function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [projects, setProjects] = useState([]);
   const [pid, setPid] = useState(null);
-  const [section, setSection] = useState("overview");
+  const [section, setSection] = useState(() => sessionStorage.getItem("section") || "overview");
+  const setAndSaveSection = useCallback((s) => { sessionStorage.setItem("section", s); setSection(s); }, []);
+  const setAndSavePid = useCallback((id) => { sessionStorage.setItem("pid", id); setPid(id); }, []);
   const [showNew, setShowNew] = useState(false);
   const [showSync, setShowSync] = useState(false);
   const [showGraduation, setShowGraduation] = useState(false);
@@ -881,6 +883,8 @@ export default function App() {
         setProjects([]);
         setPid(null);
         setLoading(true);
+        sessionStorage.removeItem("pid");
+        sessionStorage.removeItem("section");
       }
     });
     return () => subscription.unsubscribe();
@@ -898,8 +902,13 @@ export default function App() {
       if (!error && data && data.length > 0) {
         const projs = data.map(row => row.data);
         setProjects(projs);
-        setPid(projs[0].id);
-        setSection(projs[0].mode === "discovery" ? "d-overview" : "overview");
+        const savedPid = sessionStorage.getItem("pid");
+        const activePid = projs.find(p => p.id === savedPid)?.id ?? projs[0].id;
+        setPid(activePid);
+        if (!sessionStorage.getItem("section")) {
+          const activeProj = projs.find(p => p.id === activePid);
+          setSection(activeProj?.mode === "discovery" ? "d-overview" : "overview");
+        }
       } else {
         await supabase.from("projects").insert([
           { id: DEMO.id, data: DEMO },
@@ -907,7 +916,7 @@ export default function App() {
         ]);
         setProjects([DEMO, DEMO_DISCOVERY]);
         setPid(DEMO.id);
-        setSection("overview");
+        if (!sessionStorage.getItem("section")) setSection("overview");
       }
       setLoading(false);
     })();
@@ -925,32 +934,35 @@ export default function App() {
   const handleCreate = useCallback(async (p) => {
     await supabase.from("projects").insert({ id: p.id, data: p });
     setProjects(ps => [...ps, p]);
-    setPid(p.id);
-    setSection(p.mode === "discovery" ? "d-overview" : "overview");
+    setAndSavePid(p.id);
+    setAndSaveSection(p.mode === "discovery" ? "d-overview" : "overview");
     setShowNew(false);
   }, []);
 
   const isDiscovery = project?.mode === "discovery";
 
   const deliverySections = {
-    overview: <Overview project={project} setSection={setSection} onSync={() => setShowSync(true)} />,
+    overview: <Overview project={project} setSection={setAndSaveSection} onSync={() => setShowSync(true)} />,
     stakeholders: <StakeholdersSection project={project} update={update} />,
     personas: <PersonasSection project={project} update={update} />,
-    epics: <EpicsSection project={project} update={update} setSection={setSection} />,
+    epics: <EpicsSection project={project} update={update} setSection={setAndSaveSection} />,
     stories: <StoriesSection project={project} update={update} />,
     bugs: <BugsSection project={project} update={update} />,
     design: <DesignSection project={project} update={update} />,
     team: <TeamSection project={project} update={update} />,
     sprint: <SprintSection project={project} update={update} />,
+    sessions: <DiscoverySessions project={project} update={update} />,
+    docs: <DiscoveryDocuments project={project} update={update} />,
     ai: <AISection project={project} update={update} />,
   };
 
   const discoverySections = {
-    "d-overview": <DiscoveryOverview project={project} update={update} setSection={setSection} />,
+    "d-overview": <DiscoveryOverview project={project} update={update} setSection={setAndSaveSection} />,
     "d-meetings": <DiscoveryMeetingPrep project={project} update={update} />,
     "d-sessions": <DiscoverySessions project={project} update={update} />,
     "d-insights": <DiscoveryInsights project={project} update={update} />,
     "d-docs": <DiscoveryDocuments project={project} update={update} />,
+    "d-personas": <PersonasSection project={project} update={update} />,
     "d-todos": <DiscoveryTodos project={project} update={update} />,
     "d-stakeholders": <DiscoveryStakeholders project={project} update={update} />,
     "d-ai": <DiscoveryAIColleague project={project} update={update} />,
@@ -991,8 +1003,8 @@ export default function App() {
   return (
     <div className="app">
       <style>{STYLE}</style>
-      <Sidebar projects={projects} pid={pid} setPid={id => { setPid(id); setSection(projects.find(p => p.id === id)?.mode === "discovery" ? "d-overview" : "overview"); }}
-        section={section} setSection={setSection} onNew={() => setShowNew(true)}
+      <Sidebar projects={projects} pid={pid} setPid={id => { setAndSavePid(id); setAndSaveSection(projects.find(p => p.id === id)?.mode === "discovery" ? "d-overview" : "overview"); }}
+        section={section} setSection={setAndSaveSection} onNew={() => setShowNew(true)}
         jiraConnected={!!project?.jira?.connected} syncTool={detectTool(project?.syncUrl)} onSync={() => setShowSync(true)}
         isDiscovery={isDiscovery} user={user} onSignOut={() => supabase.auth.signOut()} />
       <main className="main">{project && sections[section]}</main>
@@ -1009,8 +1021,8 @@ export default function App() {
           onCreateDelivery={async (deliveryProject) => {
             await supabase.from("projects").insert({ id: deliveryProject.id, data: deliveryProject });
             setProjects(ps => [...ps, deliveryProject]);
-            setPid(deliveryProject.id);
-            setSection("overview");
+            setAndSavePid(deliveryProject.id);
+            setAndSaveSection("overview");
             setShowGraduation(false);
           }}
         />
@@ -1034,6 +1046,8 @@ function Sidebar({ projects, pid, setPid, section, setSection, onNew, jiraConnec
     { id: "design", label: "Design Tasks", Icon: Palette },
     { id: "team", label: "Team & Capacity", Icon: UserCheck },
     { id: "sprint", label: "Sprint Planning", Icon: Calendar },
+    { id: "sessions", label: "Sessions & Outputs", Icon: FileText, section: "RESEARCH" },
+    { id: "docs", label: "Research Docs", Icon: Upload, section: null },
     { id: "ai", label: "AI Colleague", Icon: Bot },
   ];
 
@@ -1043,6 +1057,7 @@ function Sidebar({ projects, pid, setPid, section, setSection, onNew, jiraConnec
     { id: "d-sessions", label: "Sessions & Outputs", Icon: FileText, section: null },
     { id: "d-insights", label: "Insights", Icon: Lightbulb, section: null },
     { id: "d-docs", label: "Research Docs", Icon: Upload, section: null },
+    { id: "d-personas", label: "Personas", Icon: User, section: null },
     { id: "d-todos", label: "To Do", Icon: CheckCircle2, section: null },
     { id: "d-stakeholders", label: "Stakeholders", Icon: Users, section: null },
     { id: "d-storymap", label: "Story Mapping", Icon: Map, section: "MAPPING" },
@@ -2092,6 +2107,9 @@ function StoriesSection({ project, update }) {
   const [convo, setConvo] = useState([]);
   const [convoInput, setConvoInput] = useState("");
   const [convoStep, setConvoStep] = useState("idle");
+  const [uploadedImages, setUploadedImages] = useState([]); // [{ base64, type, name }]
+  const [splitStories, setSplitStories] = useState(null);   // null | array of story objects
+  const imageInputRef = useRef(null);
   const convoHistory = useRef([]);
   const chatBottom = useRef(null);
   useEffect(() => { chatBottom.current?.scrollIntoView({ behavior: "smooth" }); }, [convo]);
@@ -2106,7 +2124,7 @@ function StoriesSection({ project, update }) {
   };
   const del = id => update({ stories: project.stories.filter(s => s.id !== id) });
 
-  const openNew = () => { setForm(blank); setConvo([]); setConvoInput(""); setConvoStep("idle"); setModal("convo"); };
+  const openNew = () => { setForm(blank); setConvo([]); setConvoInput(""); setConvoStep("idle"); setSplitStories(null); setUploadedImages([]); setModal("convo"); };
   const openEdit = s => { setForm(s); setConvo([]); setConvoStep("idle"); setModal("edit"); };
 
   const epicList = project.epics.map(e => `id:${e.id} → "${e.title}"`).join(", ");
@@ -2115,6 +2133,8 @@ function StoriesSection({ project, update }) {
 
   const STORY_SYSTEM = `You are a senior PM. When the user describes a story, generate the full structured story.
 Return JSON in a code block when ready: { "title": "[TEAM] EpicName | Short desc", "epicId": "...", "description": "As a \\"...\\" I want to \\"...\\" so that I can \\"...\\"", "ac": "subtitle\\nGIVEN | ...\\nWHEN | ...\\nTHEN | ...\\nAND | ...\\n---\\nsubtitle2\\nGIVEN | ...", "aiPts": N, "oos": "", "deps": "" }
+If the user describes MULTIPLE distinct stories or the prompt/images reveal multiple independent features, return a JSON ARRAY instead: [{ story1 }, { story2 }, ...]. Each element must be a complete, independent story object.
+If images are provided, analyse them to extract user flows, screens, or design context and incorporate those details into the story/stories.
 Available epics: ${epicList}
 Available team tags: ${teamTags}
 AC format: ${AC_FORMAT}
@@ -2123,15 +2143,21 @@ ${project.aiRules.length ? "Project rules: " + project.aiRules.join("; ") : ""}`
 
   const startConvo = async () => {
     const text = convoInput.trim();
-    if (!text) return;
+    if (!text && uploadedImages.length === 0) return;
     setConvoInput("");
-    const userMsg = { role: "user", content: text };
+    const contentParts = [];
+    if (text) contentParts.push({ type: "text", text });
+    uploadedImages.forEach(img => contentParts.push({ type: "image", source: { type: "base64", media_type: img.type, data: img.base64 } }));
+    const msgContent = contentParts.length === 1 && contentParts[0].type === "text" ? text : contentParts;
+    const userMsg = { role: "user", content: msgContent };
     convoHistory.current = [userMsg];
-    setConvo([{ role: "user", text }, { role: "ai", text: "..." }]);
+    const displayText = text + (uploadedImages.length > 0 ? ` [${uploadedImages.length} image${uploadedImages.length > 1 ? "s" : ""} attached]` : "");
+    setConvo([{ role: "user", text: displayText, images: uploadedImages }, { role: "ai", text: "..." }]);
+    setUploadedImages([]);
     setConvoStep("generating");
-    const reply = await askClaude(convoHistory.current, STORY_SYSTEM);
+    const reply = await askClaude(convoHistory.current, STORY_SYSTEM, 2000);
     convoHistory.current.push({ role: "assistant", content: reply });
-    handleReply(reply, [{ role: "user", text }]);
+    handleReply(reply, [{ role: "user", text: displayText }]);
   };
 
   const sendConvo = async () => {
@@ -2151,10 +2177,18 @@ ${project.aiRules.length ? "Project rules: " + project.aiRules.join("; ") : ""}`
     if (jsonMatch) {
       try {
         const parsed = JSON.parse(jsonMatch[1].trim());
-        setForm(f => ({ ...f, ...parsed }));
         const cleanText = reply.replace(/```[\s\S]*?```/g, "").trim();
-        const aiMsg = { role: "ai", text: cleanText || "✓ Story ready — review it below before saving." };
-        setConvo(prev => [...(prevConvo || prev.slice(0, -1)), aiMsg]);
+        if (Array.isArray(parsed) && parsed.length > 1) {
+          setSplitStories(parsed);
+          const aiMsg = { role: "ai", text: cleanText || `✓ ${parsed.length} stories detected — save them as separate tickets below.` };
+          setConvo(prev => [...(prevConvo || prev.slice(0, -1)), aiMsg]);
+        } else {
+          const story = Array.isArray(parsed) ? parsed[0] : parsed;
+          setSplitStories(null);
+          setForm(f => ({ ...f, ...story }));
+          const aiMsg = { role: "ai", text: cleanText || "✓ Story ready — review it below before saving." };
+          setConvo(prev => [...(prevConvo || prev.slice(0, -1)), aiMsg]);
+        }
         setConvoStep("preview");
       } catch {
         setConvo(prev => [...prev.slice(0, -1), { role: "ai", text: reply }]);
@@ -2315,12 +2349,22 @@ Generate ${existing > 0 ? "additional" : "comprehensive"} test cases covering al
         <Modal wide title="New Story" onClose={() => setModal(null)}
           footer={
             convoStep === "preview"
-              ? <><button className="btn btn-ghost" onClick={() => setModal("edit")}>Edit Fields →</button><button className="btn btn-primary" onClick={save}>Save Story</button></>
+              ? splitStories
+                ? <>
+                    <button className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button>
+                    <button className="btn btn-primary" onClick={() => {
+                      update({ stories: [...project.stories, ...splitStories.map(s => ({ ...blank, ...s, id: uid() }))] });
+                      setModal(null);
+                    }}>
+                      <GitBranch size={13} /> Save {splitStories.length} Stories
+                    </button>
+                  </>
+                : <><button className="btn btn-ghost" onClick={() => setModal("edit")}>Edit Fields →</button><button className="btn btn-primary" onClick={save}>Save Story</button></>
               : <button className="btn btn-ghost" onClick={() => setModal(null)}>Cancel</button>
           }>
-          <p style={{ fontSize: 13, color: "#8993a4", marginBottom: 12, lineHeight: 1.6 }}>Describe the story in plain language. AI will name it, structure it, and generate AC.</p>
+          <p style={{ fontSize: 13, color: "#8993a4", marginBottom: 12, lineHeight: 1.6 }}>Describe the story in plain language. Attach designs or user flow images to give AI more context.</p>
 
-          <div style={{ background: "#f8f9fa", border: "1px solid #dfe1e6", borderRadius: 10, overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: 420 }}>
+          <div style={{ background: "#f8f9fa", border: "1px solid #dfe1e6", borderRadius: 10, overflow: "hidden", display: "flex", flexDirection: "column", maxHeight: 460 }}>
             <div style={{ flex: 1, overflowY: "auto", padding: "14px 14px 8px", minHeight: 80 }}>
               {convo.length === 0 && (
                 <div style={{ fontSize: 12, color: "#b3bac5", fontStyle: "italic", padding: "8px 0" }}>
@@ -2330,12 +2374,21 @@ Generate ${existing > 0 ? "additional" : "comprehensive"} test cases covering al
               {convo.map((m, i) => (
                 <div key={i} className={`ai-bubble ai-bubble-${m.role === "ai" ? "bot" : "user"}`}>
                   {m.text === "..." ? <div className="ai-typing"><div className="ai-dot" /><div className="ai-dot" /><div className="ai-dot" /></div> : m.text}
+                  {m.images && m.images.length > 0 && (
+                    <div style={{ display: "flex", gap: 6, marginTop: 6, flexWrap: "wrap" }}>
+                      {m.images.map((img, j) => (
+                        <img key={j} src={`data:${img.type};base64,${img.base64}`} alt={img.name}
+                          style={{ height: 48, width: 48, objectFit: "cover", borderRadius: 4, border: "1px solid rgba(255,255,255,.3)" }} />
+                      ))}
+                    </div>
+                  )}
                 </div>
               ))}
               <div ref={chatBottom} />
             </div>
 
-            {convoStep === "preview" && form.title && (
+            {/* Single story preview */}
+            {convoStep === "preview" && !splitStories && form.title && (
               <div style={{ borderTop: "1px solid #dfe1e6", padding: 14, background: "#f1f2f4" }}>
                 <div style={{ fontSize: 10, color: "#e8c547", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>Generated Story</div>
                 <div style={{ fontWeight: 700, fontSize: 13, color: "#172b4d", marginBottom: 4 }}>{form.title}</div>
@@ -2348,13 +2401,65 @@ Generate ${existing > 0 ? "additional" : "comprehensive"} test cases covering al
               </div>
             )}
 
-            <div style={{ display: "flex", gap: 8, padding: "10px 12px", borderTop: "1px solid #dfe1e6" }}>
+            {/* Split stories preview */}
+            {convoStep === "preview" && splitStories && (
+              <div style={{ borderTop: "1px solid #dfe1e6", padding: 14, background: "#f1f2f4", overflowY: "auto", maxHeight: 220 }}>
+                <div style={{ fontSize: 10, color: "#e8c547", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>
+                  {splitStories.length} Stories Detected
+                </div>
+                {splitStories.map((s, i) => (
+                  <div key={i} style={{ background: "#fff", border: "1px solid #dfe1e6", borderRadius: 7, padding: "10px 12px", marginBottom: 6 }}>
+                    <div style={{ fontWeight: 700, fontSize: 12, color: "#172b4d", marginBottom: 2 }}>{s.title}</div>
+                    {s.description && <div style={{ fontSize: 11, color: "#6b778c", fontStyle: "italic" }}>{s.description}</div>}
+                    <div style={{ display: "flex", gap: 6, marginTop: 4 }}>
+                      {s.aiPts && <span className="pts-chip pts-ai" style={{ fontSize: 10 }}><Sparkles size={8} /> {s.aiPts}pt</span>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {/* Image thumbnails preview */}
+            {uploadedImages.length > 0 && (
+              <div style={{ display: "flex", gap: 6, padding: "8px 12px", borderTop: "1px solid #dfe1e6", flexWrap: "wrap", background: "#fff" }}>
+                {uploadedImages.map((img, i) => (
+                  <div key={i} style={{ position: "relative" }}>
+                    <img src={`data:${img.type};base64,${img.base64}`} alt={img.name}
+                      style={{ height: 44, width: 44, objectFit: "cover", borderRadius: 5, border: "1px solid #dfe1e6" }} />
+                    <button onClick={() => setUploadedImages(imgs => imgs.filter((_, j) => j !== i))}
+                      style={{ position: "absolute", top: -5, right: -5, width: 16, height: 16, borderRadius: "50%", background: "#de350b", border: "none", cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", padding: 0 }}>
+                      <X size={9} color="#fff" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div style={{ display: "flex", gap: 8, padding: "10px 12px", borderTop: "1px solid #dfe1e6", alignItems: "center" }}>
+              {/* Hidden file input */}
+              <input ref={imageInputRef} type="file" accept="image/png,image/jpeg,image/webp" multiple style={{ display: "none" }}
+                onChange={e => {
+                  Array.from(e.target.files).forEach(file => {
+                    const reader = new FileReader();
+                    reader.onload = ev => {
+                      const dataUrl = ev.target.result;
+                      const base64 = dataUrl.split(",")[1];
+                      setUploadedImages(imgs => [...imgs, { base64, type: file.type, name: file.name }]);
+                    };
+                    reader.readAsDataURL(file);
+                  });
+                  e.target.value = "";
+                }} />
+              <button title="Attach image" onClick={() => imageInputRef.current?.click()} disabled={convoStep === "generating"}
+                style={{ flexShrink: 0, background: "none", border: "1px solid #dfe1e6", borderRadius: 6, padding: "7px 9px", cursor: "pointer", color: uploadedImages.length > 0 ? "#0052cc" : "#8993a4", display: "flex", alignItems: "center" }}>
+                <Upload size={13} />
+              </button>
               <textarea value={convoInput} onChange={e => setConvoInput(e.target.value)}
                 onKeyDown={e => e.key === "Enter" && !e.shiftKey && (e.preventDefault(), convo.length === 0 ? startConvo() : sendConvo())}
                 placeholder="Describe the story... (Enter to send)" disabled={convoStep === "generating"}
                 style={{ flex: 1, minHeight: "unset", height: 38, resize: "none", padding: "9px 12px", fontSize: 13 }} />
               <button className="btn btn-primary" onClick={convo.length === 0 ? startConvo : sendConvo}
-                disabled={!convoInput.trim() || convoStep === "generating"} style={{ padding: "8px 14px" }}>
+                disabled={(!convoInput.trim() && uploadedImages.length === 0) || convoStep === "generating"} style={{ padding: "8px 14px" }}>
                 <Send size={13} />
               </button>
             </div>
@@ -2769,9 +2874,9 @@ Generate immediately from a good description. Only ask ONE question if truly unc
             <span className="tag tag-Design" style={{ flexShrink: 0 }}>Design</span>
             <span style={{ flex: 1, fontSize: 13, color: "#344563", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.title}</span>
             <span className="tag tag-muted" style={{ fontSize: 10, flexShrink: 0 }}>{epicOf(d.epicId)}</span>
-            <button className="btn btn-ghost btn-sm" onClick={() => setProtoTask(d)} title="Lo-fi prototype for this task">
+            {false && <button className="btn btn-ghost btn-sm" onClick={() => setProtoTask(d)} title="Lo-fi prototype for this task">
               <Layers size={12} /> {d.wireframe?.html ? "Prototype" : "Prototype"}
-            </button>
+            </button>}
             <button className="icon-btn" onClick={() => { setForm(d); setConvo([]); setConvoStep("idle"); setModal("form"); }}><Edit2 size={13} /></button>
             <button className="icon-btn" onClick={() => del(d.id)}><Trash2 size={13} /></button>
           </div>
@@ -3774,6 +3879,13 @@ Rules:
 
   const confirm = () => {
     const risks = (project.risks || []).map(r => typeof r === "string" ? r : r.text);
+    // Merge AI-generated personas with any manually created discovery personas
+    const discoveryPersonas = (project.personas || []).map(p => ({ ...p, id: uid() }));
+    const aiPersonas = (generated.personas || []);
+    const mergedPersonas = [
+      ...aiPersonas,
+      ...discoveryPersonas.filter(dp => !aiPersonas.some(ap => ap.role?.toLowerCase() === dp.role?.toLowerCase())),
+    ];
     const deliveryProject = {
       id: uid(),
       name: project.name,
@@ -3784,7 +3896,7 @@ Rules:
       assumptions: generated.assumptions || project.assumptions || [],
       risks: generated.risks || risks,
       stakeholders: generated.stakeholders || [],
-      personas: generated.personas || [],
+      personas: mergedPersonas,
       epics: generated.epics || [],
       stories: generated.stories || [],
       bugs: [],
@@ -3799,6 +3911,8 @@ Rules:
       velocityHistory: [],
       jira: null,
       syncUrl: "",
+      sessions: project.sessions || [],
+      documents: project.documents || [],
       discoveryId: project.id,
     };
     onCreateDelivery(deliveryProject);
@@ -4789,7 +4903,6 @@ function DiscoverySessions({ project, update }) {
   const [extracting, setExtracting] = useState(null);
   const [shareSession, setShareSession] = useState(null);
   const [copied, setCopied] = useState(false);
-  const [openList, setOpenList] = useState(null); // "risks" | "opportunities" | "assumptions" | "flows"
   const [editingItem, setEditingItem] = useState(null); // { type, id, text }
   const sessions = project.sessions || [];
 
@@ -4844,135 +4957,12 @@ function DiscoverySessions({ project, update }) {
     setExtracting(null);
   };
 
-  const outputs = {
-    risks: project.risks || [],
-    opportunities: project.opportunities || [],
-    assumptions: project.assumptions || [],
-    flows: project.flows || [],
-  };
-
   return (
     <div>
       <div className="sec-head">
-        <div><div className="sec-title">Sessions & Outputs</div><div className="sec-sub">Log meeting notes — AI extracts risks, opportunities, assumptions, and flows</div></div>
+        <div><div className="sec-title">Sessions & Outputs</div><div className="sec-sub">Log meeting notes and let AI extract insights</div></div>
         <button className="btn btn-primary" onClick={() => setModal("new")}><Plus size={13} /> Log Session</button>
       </div>
-
-      <div className="two-col" style={{ marginBottom: 20 }}>
-        {[
-          { label: "Risks", key: "risks", items: outputs.risks, color: "#de350b", bg: "#ffebe6" },
-          { label: "Opportunities", key: "opportunities", items: outputs.opportunities, color: "#00632b", bg: "#e3fcef" },
-          { label: "Assumptions", key: "assumptions", items: outputs.assumptions, color: "#7a5c00", bg: "#fff8e1" },
-          { label: "Flows Mapped", key: "flows", items: outputs.flows, color: "#0052cc", bg: "#e6f0ff" },
-        ].map(({ label, key, items, color, bg }) => (
-          <div key={label} className="card" style={{ padding: "14px 16px", cursor: "pointer" }} onClick={() => setOpenList(key)}>
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 8 }}>
-              <span style={{ fontSize: 11, fontWeight: 700, color, fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em" }}>{label}</span>
-              <span style={{ fontSize: 12, fontWeight: 700, color, background: bg, padding: "1px 8px", borderRadius: 4 }}>{items.length}</span>
-            </div>
-            {items.slice(0, 3).map((item, i) => (
-              <div key={i} style={{ fontSize: 12, color: "#505f79", padding: "4px 0", borderBottom: "1px solid #f1f2f4", lineHeight: 1.4 }}>
-                {typeof item === "string" ? item : item.text}
-              </div>
-            ))}
-            {items.length > 3 && <div style={{ fontSize: 11, color: "#97a0af", marginTop: 4 }}>+{items.length - 3} more</div>}
-            {items.length === 0 && <div style={{ fontSize: 11, color: "#97a0af" }}>None yet — click to add</div>}
-          </div>
-        ))}
-      </div>
-
-      {openList && (() => {
-        const listMeta = {
-          risks: { label: "Risks", color: "#de350b", bg: "#ffebe6" },
-          opportunities: { label: "Opportunities", color: "#00632b", bg: "#e3fcef" },
-          assumptions: { label: "Assumptions", color: "#7a5c00", bg: "#fff8e1" },
-          flows: { label: "Flows Mapped", color: "#0052cc", bg: "#e6f0ff" },
-        }[openList];
-        const rawItems = project[openList] || [];
-        // normalise: risks/opportunities are {id,text,source}, assumptions/flows are strings
-        const isObj = openList === "risks" || openList === "opportunities";
-        const items = rawItems.map(i => isObj
-          ? (typeof i === "string" ? { id: uid(), text: i, source: "" } : i)
-          : i
-        );
-
-        const saveItems = (updated) => update({ [openList]: updated });
-
-        const deleteItem = (idx) => {
-          if (!window.confirm("Delete this item?")) return;
-          const updated = items.filter((_, i) => i !== idx);
-          saveItems(updated);
-        };
-
-        const startEdit = (idx) => {
-          const item = items[idx];
-          setEditingItem({ idx, text: isObj ? item.text : item, source: isObj ? (item.source || "") : "" });
-        };
-
-        const saveEdit = () => {
-          if (!editingItem) return;
-          const updated = items.map((item, i) => {
-            if (i !== editingItem.idx) return item;
-            return isObj ? { ...item, text: editingItem.text, source: editingItem.source } : editingItem.text;
-          });
-          saveItems(updated);
-          setEditingItem(null);
-        };
-
-        const addNew = () => {
-          const updated = isObj
-            ? [...items, { id: uid(), text: "New item", source: "" }]
-            : [...items, "New item"];
-          saveItems(updated);
-          setEditingItem({ idx: updated.length - 1, text: "New item", source: "" });
-        };
-
-        return (
-          <Modal wide title={listMeta.label} onClose={() => { setOpenList(null); setEditingItem(null); }}
-            footer={
-              <><button className="btn btn-ghost" onClick={addNew}><Plus size={13} /> Add</button>
-                <button className="btn btn-primary" onClick={() => { setOpenList(null); setEditingItem(null); }}>Done</button></>
-            }>
-            {items.length === 0 && <div style={{ color: "#97a0af", fontSize: 13, textAlign: "center", padding: "24px 0" }}>No items yet. Click Add to create one.</div>}
-            {items.map((item, idx) => {
-              const text = isObj ? item.text : item;
-              const source = isObj ? (item.source || "") : "";
-              const isEditing = editingItem?.idx === idx;
-              return (
-                <div key={idx} style={{ display: "flex", gap: 10, alignItems: "flex-start", padding: "10px 0", borderBottom: "1px solid #f1f2f4" }}>
-                  <div style={{ flex: 1 }}>
-                    {isEditing ? (
-                      <>
-                        <textarea value={editingItem.text} onChange={e => setEditingItem(ei => ({ ...ei, text: e.target.value }))}
-                          rows={2} style={{ width: "100%", fontSize: 13, padding: "6px 8px", border: "1px solid #c1c7d0", borderRadius: 4, resize: "vertical" }} autoFocus />
-                        {isObj && (
-                          <input value={editingItem.source} onChange={e => setEditingItem(ei => ({ ...ei, source: e.target.value }))}
-                            placeholder="Source (optional)" style={{ width: "100%", fontSize: 12, padding: "4px 8px", border: "1px solid #c1c7d0", borderRadius: 4, marginTop: 4 }} />
-                        )}
-                        <div style={{ display: "flex", gap: 6, marginTop: 6 }}>
-                          <button className="btn btn-primary btn-sm" onClick={saveEdit}>Save</button>
-                          <button className="btn btn-ghost btn-sm" onClick={() => setEditingItem(null)}>Cancel</button>
-                        </div>
-                      </>
-                    ) : (
-                      <>
-                        <div style={{ fontSize: 13, color: "#172b4d", lineHeight: 1.5 }}>{text}</div>
-                        {source && <div style={{ fontSize: 11, color: "#97a0af", marginTop: 2 }}>Source: {source}</div>}
-                      </>
-                    )}
-                  </div>
-                  {!isEditing && (
-                    <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
-                      <button className="icon-btn" onClick={() => startEdit(idx)} title="Edit"><Edit2 size={13} /></button>
-                      <button className="icon-btn" onClick={() => deleteItem(idx)} title="Delete"><Trash2 size={13} /></button>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </Modal>
-        );
-      })()}
 
       {sessions.length === 0 ? (
         <Empty icon={<FileText size={36} />} title="No sessions logged yet" sub="Log your first discovery session and let AI extract the key insights"
@@ -6806,7 +6796,7 @@ function DiscoveryDesign({ project, update }) {
       <div className="sec-head">
         <div><div className="sec-title">Design Planning</div><div className="sec-sub">Research plan, design priorities, and next steps for the design team</div></div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button className="btn btn-ghost" onClick={() => setShowProto(true)}><Layers size={13} /> Prototype</button>
+          {false && <button className="btn btn-ghost" onClick={() => setShowProto(true)}><Layers size={13} /> Prototype</button>}
           <button className="btn btn-ai" onClick={generate} disabled={generating}>{generating ? "Generating..." : <><Sparkles size={13} /> AI Generate</>}</button>
         </div>
       </div>
