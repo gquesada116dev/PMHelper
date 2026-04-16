@@ -2342,6 +2342,7 @@ ${project.aiRules.length ? "Project rules: " + project.aiRules.join("; ") : ""}`
   const [improving, setImproving] = useState(null);
   const [copied, setCopied] = useState(null);
   const [generatingTCs, setGeneratingTCs] = useState(false);
+  const [tcError, setTcError] = useState(null);
   const [tcExpanded, setTcExpanded] = useState(null);
   const [editingTC, setEditingTC] = useState(null); // { idx, ...fields }
   const syncTool = detectTool(project.syncUrl);
@@ -2393,8 +2394,9 @@ Return JSON array only:
 
 Generate ${existing > 0 ? "additional" : "comprehensive"} test cases. Return only the JSON array.`
     }], "You are a senior QA engineer. Generate structured test cases. Return only a valid JSON array.", 3000);
+    if (!reply || reply.startsWith("Error:")) throw new Error(reply || "No response from AI");
     const parsed = parseJSON(reply);
-    if (!Array.isArray(parsed)) return [];
+    if (!Array.isArray(parsed)) throw new Error("AI returned unexpected format — try again");
     return parsed.map((tc, i) => ({
       id: uid(),
       code: tc.code || `TC-${String(existing + i + 1).padStart(3, "0")}`,
@@ -2410,19 +2412,24 @@ Generate ${existing > 0 ? "additional" : "comprehensive"} test cases. Return onl
   const generateTestCases = async () => {
     if (!form.title) return;
     setGeneratingTCs(true);
-    // Pass sibling stories for regression context
-    const siblings = (project.stories || []).filter(s => s.epicId === form.epicId && s.id !== form.id);
-    const epic = project.epics.find(e => e.id === form.epicId);
-    const regressionCtx = siblings.length > 0
-      ? `Epic: "${epic?.title || ""}"\nOther stories already built in this epic:\n${siblings.map(s => `- ${s.title}`).join("\n")}`
-      : "";
-    const newCases = await generateTestCasesFor(form, regressionCtx);
-    setGeneratingTCs(false);
-    if (newCases.length === 0) return;
-    const merged = [...(form.testCases || []), ...newCases];
-    setForm(f => ({ ...f, testCases: merged }));
-    // also persist immediately so closing without Save doesn't lose them
-    if (form.id) update({ stories: project.stories.map(s => s.id === form.id ? { ...s, testCases: merged } : s) });
+    setTcError(null);
+    try {
+      // Pass sibling stories for regression context
+      const siblings = (project.stories || []).filter(s => s.epicId === form.epicId && s.id !== form.id);
+      const epic = project.epics.find(e => e.id === form.epicId);
+      const regressionCtx = siblings.length > 0
+        ? `Epic: "${epic?.title || ""}"\nOther stories already built in this epic:\n${siblings.map(s => `- ${s.title}`).join("\n")}`
+        : "";
+      const newCases = await generateTestCasesFor(form, regressionCtx);
+      const merged = [...(form.testCases || []), ...newCases];
+      setForm(f => ({ ...f, testCases: merged }));
+      // also persist immediately so closing without Save doesn't lose them
+      if (form.id) update({ stories: project.stories.map(s => s.id === form.id ? { ...s, testCases: merged } : s) });
+    } catch (e) {
+      setTcError(e.message);
+    } finally {
+      setGeneratingTCs(false);
+    }
   };
 
   const improveStory = async (s) => {
@@ -2643,18 +2650,22 @@ Generate ${existing > 0 ? "additional" : "comprehensive"} test cases. Return onl
                 setForm(improvedStory);
                 // Generate test cases from the improved story data
                 setGeneratingTCs(true);
-                const sibls = (project.stories || []).filter(x => x.epicId === improvedStory.epicId && x.id !== improvedStory.id);
-                const ep = project.epics.find(e => e.id === improvedStory.epicId);
-                const regCtx = sibls.length > 0
-                  ? `Epic: "${ep?.title || ""}"\nOther stories already built in this epic:\n${sibls.map(x => `- ${x.title}`).join("\n")}`
-                  : "";
-                const newCases = await generateTestCasesFor(improvedStory, regCtx);
-                setGeneratingTCs(false);
-                if (newCases.length > 0) {
+                setTcError(null);
+                try {
+                  const sibls = (project.stories || []).filter(x => x.epicId === improvedStory.epicId && x.id !== improvedStory.id);
+                  const ep = project.epics.find(e => e.id === improvedStory.epicId);
+                  const regCtx = sibls.length > 0
+                    ? `Epic: "${ep?.title || ""}"\nOther stories already built in this epic:\n${sibls.map(x => `- ${x.title}`).join("\n")}`
+                    : "";
+                  const newCases = await generateTestCasesFor(improvedStory, regCtx);
                   const merged = [...(improvedStory.testCases || []), ...newCases];
                   const finalStory = { ...improvedStory, testCases: merged };
                   setForm(finalStory);
                   update({ stories: project.stories.map(s2 => s2.id === form.id ? finalStory : s2) });
+                } catch (e) {
+                  setTcError(e.message);
+                } finally {
+                  setGeneratingTCs(false);
                 }
               }}
               disabled={improving === form.id || generatingTCs}
@@ -2704,6 +2715,12 @@ Generate ${existing > 0 ? "additional" : "comprehensive"} test cases. Return onl
               {generatingTCs ? "Generating…" : <><Sparkles size={12} /> Generate TCs</>}
             </button>
           </div>
+
+          {tcError && (
+            <div style={{ background: "#ffebe6", border: "1px solid #ff8f73", borderRadius: 8, padding: "10px 14px", color: "#de350b", fontSize: 12, marginBottom: 10 }}>
+              Failed to generate test cases: {tcError}
+            </div>
+          )}
 
           {(form.testCases || []).length === 0 && !generatingTCs && (
             <div style={{ background: "#f8f9fa", border: "1px dashed #dfe1e6", borderRadius: 8, padding: "16px", textAlign: "center", color: "#97a0af", fontSize: 13, marginBottom: 4 }}>
