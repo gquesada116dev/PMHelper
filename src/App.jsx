@@ -447,12 +447,12 @@ function SyncModal({ project, update, onClose }) {
       {tab === "import" && (
         <div>
           <p style={{ fontSize: 13, color: "#8993a4", marginBottom: 16, lineHeight: 1.65 }}>
-            Export a CSV from your tracker and upload it here. We match by title and save the issue keys (e.g. <span style={{ fontFamily: "'DM Mono',monospace", color: "#e8c547" }}>CAB-42</span>) — works with Jira, Linear, GitHub, Shortcut, Azure DevOps.
+            Export a CSV from your tracker and upload it here. We match by title and save the issue keys (e.g. <span style={{ fontFamily: "'DM Mono',monospace", color: "#b95000" }}>CAB-42</span>) — works with Jira, Linear, GitHub, Shortcut, Azure DevOps.
           </p>
           {!importCSV ? (
             <div>
               <div onClick={() => fileRef.current?.click()} style={{ border: "2px dashed #c1c7d0", borderRadius: 10, padding: "36px 24px", textAlign: "center", cursor: "pointer", transition: "border-color .15s" }}
-                onMouseEnter={e => e.currentTarget.style.borderColor = "#e8c547"} onMouseLeave={e => e.currentTarget.style.borderColor = "#c1c7d0"}>
+                onMouseEnter={e => e.currentTarget.style.borderColor = "#b95000"} onMouseLeave={e => e.currentTarget.style.borderColor = "#c1c7d0"}>
                 <div style={{ fontSize: 28, marginBottom: 10 }}>📄</div>
                 <div style={{ fontSize: 14, color: "#344563", fontWeight: 500, marginBottom: 4 }}>Drop CSV here or click to upload</div>
                 <div style={{ fontSize: 12, color: "#97a0af" }}>Needs a "key" column and a "summary" or "title" column</div>
@@ -477,7 +477,7 @@ function SyncModal({ project, update, onClose }) {
                   const item = [...project.stories, ...project.bugs].find(x => x.id === u.id);
                   return (
                     <div key={i} style={{ display: "flex", gap: 10, alignItems: "center", padding: "5px 0", borderTop: "1px solid #ebecf0" }}>
-                      <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: "#e8c547", minWidth: 70 }}>{u.key}</span>
+                      <span style={{ fontFamily: "'DM Mono',monospace", fontSize: 11, color: "#b95000", minWidth: 70 }}>{u.key}</span>
                       <span style={{ fontSize: 12, color: "#505f79", flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{item?.title || "—"}</span>
                       <span style={{ fontSize: 10, color: "#97a0af" }}>{Math.round(u.score * 100)}%</span>
                       {u.isBug && <span className="tag tag-BUG" style={{ fontSize: 9 }}>BUG</span>}
@@ -632,20 +632,20 @@ body{background:#f4f5f7}
 .nav-item.active .nav-icon{color:#0052cc}
 .nav-icon{flex-shrink:0;opacity:.8}
 .sbar-footer{padding:10px 10px;border-top:1px solid #ebecf0}
-.new-proj-btn{width:100%;display:flex;align-items:center;gap:7px;padding:8px 10px;background:rgba(232,197,71,.1);border:1px solid rgba(232,197,71,.4);border-radius:7px;cursor:pointer;color:#b95000;font-size:12px;font-weight:600;font-family:'DM Sans',sans-serif;transition:all .15s}
-.new-proj-btn:hover{background:rgba(232,197,71,.2);border-color:rgba(232,197,71,.6)}
+.new-proj-btn{width:100%;display:flex;align-items:center;gap:7px;padding:8px 10px;background:rgba(232,197,71,.1);border:1px solid rgba(185,80,0,.35);border-radius:7px;cursor:pointer;color:#b95000;font-size:12px;font-weight:600;font-family:'DM Sans',sans-serif;transition:all .15s}
+.new-proj-btn:hover{background:rgba(185,80,0,.25);border-color:rgba(232,197,71,.6)}
 .main{flex:1;overflow-y:auto;padding:32px 36px 48px;background:#f4f5f7}
 .sec-head{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:28px;gap:16px}
 .sec-title{font-family:'Syne',sans-serif;font-size:22px;font-weight:700;color:#172b4d;letter-spacing:-.025em;line-height:1.15}
 .sec-sub{font-size:12px;color:#97a0af;margin-top:4px;font-weight:400}
 .sec-actions{display:flex;gap:8px;align-items:center;flex-shrink:0}
 .btn{display:inline-flex;align-items:center;gap:6px;border-radius:7px;font-size:13px;font-weight:500;cursor:pointer;transition:all .15s;border:none;font-family:'DM Sans',sans-serif;padding:8px 14px;white-space:nowrap;line-height:1}
-.btn-primary{background:#ff991f;color:#3d2e00}
-.btn-primary:hover{background:#f5d35a;transform:translateY(-1px);box-shadow:0 2px 8px rgba(232,197,71,.4)}
+.btn-primary{background:#0052cc;color:#ffffff}
+.btn-primary:hover{background:#0065ff;transform:translateY(-1px);box-shadow:0 2px 8px rgba(0,82,204,.35)}
 .btn-ghost{background:transparent;color:#505f79;border:1px solid #dfe1e6}
 .btn-ghost:hover{background:#f4f5f7;color:#172b4d;border-color:#c1c7d0}
-.btn-ai{background:rgba(232,197,71,.1);color:#b95000;border:1px solid rgba(232,197,71,.4)}
-.btn-ai:hover{background:rgba(232,197,71,.2);border-color:rgba(232,197,71,.6)}
+.btn-ai{background:rgba(185,80,0,.08);color:#b95000;border:1px solid rgba(185,80,0,.3)}
+.btn-ai:hover{background:rgba(185,80,0,.15);border-color:rgba(185,80,0,.5)}
 .btn-danger{background:transparent;color:#de350b;border:1px solid rgba(222,53,11,.25)}
 .btn-danger:hover{background:rgba(222,53,11,.08)}
 .btn-sm{padding:5px 10px;font-size:12px}
@@ -697,7 +697,7 @@ textarea{resize:vertical;min-height:70px}
 .empty p{font-size:12px;color:#b3bac5}
 .ai-bubble{border-radius:10px;padding:12px 14px;margin-bottom:8px;font-size:13px;line-height:1.7;max-width:84%;white-space:pre-wrap;word-break:break-word}
 .ai-bubble-bot{background:#f4f5f7;color:#344563;margin-right:auto;border-bottom-left-radius:3px;border:1px solid #ebecf0}
-.ai-bubble-user{background:#ff991f;color:#3d2e00;margin-left:auto;border-bottom-right-radius:3px;font-weight:500}
+.ai-bubble-user{background:#0052cc;color:#ffffff;margin-left:auto;border-bottom-right-radius:3px;font-weight:500}
 .ai-typing{display:inline-flex;align-items:center;gap:4px;padding:8px 12px}
 .ai-dot{width:5px;height:5px;border-radius:50%;background:#b3bac5;animation:bounce 1.2s infinite}
 .ai-dot:nth-child(2){animation-delay:.2s}
@@ -706,20 +706,20 @@ textarea{resize:vertical;min-height:70px}
 .chips{display:flex;gap:6px;flex-wrap:wrap}
 .chip{padding:3px 10px;background:#f1f2f4;border:1px solid #dfe1e6;border-radius:20px;font-size:11px;color:#6b778c}
 .progress-bar{height:3px;background:#ebecf0;border-radius:2px;overflow:hidden;margin-top:8px}
-.progress-fill{height:100%;background:linear-gradient(90deg,#e8c547,#f5d35a);border-radius:2px}
+.progress-fill{height:100%;background:linear-gradient(90deg,#b95000,#e87c00);border-radius:2px}
 .ac-block{background:#f8f9fa;border:1px solid #ebecf0;border-radius:8px;padding:12px 14px;margin-bottom:8px}
 .ac-row{margin-bottom:8px}
 .ac-lbl{font-size:10px;color:#97a0af;font-weight:600;font-family:'DM Mono',monospace;text-transform:uppercase;letter-spacing:.06em;margin-bottom:3px}
 .ac-val{font-size:12px;color:#505f79;line-height:1.5}
 .pts-row{display:inline-flex;gap:6px;align-items:center}
 .pts-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:5px;font-size:11px;font-family:'DM Mono',monospace}
-.pts-ai{background:rgba(232,197,71,.12);color:#b95000;border:1px solid rgba(232,197,71,.3)}
+.pts-ai{background:rgba(185,80,0,.1);color:#b95000;border:1px solid rgba(232,197,71,.3)}
 .pts-team{background:#e3fcef;color:#00632b;border:1px solid #abf5d1}
 .pts-empty{background:#f1f2f4;color:#8993a4;border:1px solid #dfe1e6}
 .step-dots{display:flex;gap:5px;margin-bottom:20px}
 .step-dot{width:6px;height:6px;border-radius:50%;background:#dfe1e6;transition:background .2s}
 .step-dot.on{background:#ff991f}
-.influence-H{color:#e8c547}
+.influence-H{color:#b95000}
 .influence-M{color:#0052cc}
 .influence-L{color:#97a0af}
 .sprint-lane{background:#f8f9fa;border:1px solid #dfe1e6;border-radius:10px;padding:16px;min-height:120px;flex:1}
@@ -841,7 +841,7 @@ function LoginScreen() {
           <button
             type="submit"
             disabled={loading || !email.trim() || !password}
-            style={{ width: "100%", padding: "10px 0", background: "#e8c547", color: "#3d2e00", border: "none", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", opacity: (loading || !email.trim() || !password) ? 0.6 : 1, transition: "all .15s" }}
+            style={{ width: "100%", padding: "10px 0", background: "#0052cc", color: "#ffffff", border: "none", borderRadius: 7, fontSize: 13, fontWeight: 600, cursor: "pointer", fontFamily: "'DM Sans', sans-serif", opacity: (loading || !email.trim() || !password) ? 0.6 : 1, transition: "all .15s" }}
           >
             {loading ? "Signing in…" : "Sign In"}
           </button>
@@ -991,7 +991,7 @@ export default function App() {
       <div className="app" style={{ alignItems: "center", justifyContent: "center" }}>
         <style>{STYLE}</style>
         <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 12 }}>
-          <div style={{ width: 32, height: 32, background: "#e8c547", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
+          <div style={{ width: 32, height: 32, background: "#b95000", borderRadius: 8, display: "flex", alignItems: "center", justifyContent: "center" }}>
             <Loader size={16} color="#0d0f14" />
           </div>
           <span style={{ color: "#5d6a85", fontSize: 13 }}>Loading your projects…</span>
@@ -1099,7 +1099,7 @@ function Sidebar({ projects, pid, setPid, section, setSection, onNew, jiraConnec
             ))}
             <div className="sbar-dropdown-sep" />
             <div className="sbar-dropdown-item" onClick={() => { onNew(); setOpen(false); }}>
-              <span style={{ color: "#e8c547" }}>+ New project</span>
+              <span style={{ color: "#b95000" }}>+ New project</span>
             </div>
           </div>
         )}
@@ -1107,7 +1107,7 @@ function Sidebar({ projects, pid, setPid, section, setSection, onNew, jiraConnec
       <nav className="sbar-nav">
         {isDiscovery && (
           <div style={{ padding: "6px 10px 2px", marginBottom: 2 }}>
-            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: "#e8c547", fontFamily: "'DM Mono',monospace", background: "rgba(232,197,71,.12)", padding: "2px 7px", borderRadius: 4 }}>Discovery Mode</span>
+            <span style={{ fontSize: 9, fontWeight: 700, letterSpacing: ".1em", textTransform: "uppercase", color: "#b95000", fontFamily: "'DM Mono',monospace", background: "rgba(185,80,0,.1)", padding: "2px 7px", borderRadius: 4 }}>Discovery Mode</span>
           </div>
         )}
         {navItems.map(({ id, label, Icon, section: sectionLabel }) => {
@@ -1411,7 +1411,7 @@ function StakeholdersSection({ project, update }) {
               {suggestions.map((s, i) => (
                 <div key={s.id} style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "10px 0", borderBottom: i < suggestions.length - 1 ? "1px solid #ebecf0" : "none" }}>
                   <input type="checkbox" checked={s._selected} onChange={e => setSuggestions(prev => prev.map((p, j) => j === i ? { ...p, _selected: e.target.checked } : p))}
-                    style={{ marginTop: 3, accentColor: "#e8c547", flexShrink: 0 }} />
+                    style={{ marginTop: 3, accentColor: "#b95000", flexShrink: 0 }} />
                   <div style={{ flex: 1 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 3, flexWrap: "wrap" }}>
                       <span style={{ fontWeight: 600, fontSize: 13, color: "#172b4d" }}>{s.name}</span>
@@ -1756,8 +1756,8 @@ Rules:
 
             {/* Draft preview */}
             {convoStep === "preview" && draft && (
-              <div style={{ background: "#f8f9fa", border: "1px solid rgba(232,197,71,.2)", borderRadius: 8, padding: 14, marginBottom: 12 }}>
-                <div style={{ fontSize: 10, color: "#e8c547", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 8 }}>Generated Profile — click "Edit & Save" to adjust</div>
+              <div style={{ background: "#f8f9fa", border: "1px solid rgba(185,80,0,.25)", borderRadius: 8, padding: 14, marginBottom: 12 }}>
+                <div style={{ fontSize: 10, color: "#b95000", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 8 }}>Generated Profile — click "Edit & Save" to adjust</div>
                 <div style={{ fontWeight: 700, fontSize: 14, color: "#172b4d", marginBottom: 6 }}>{draft.role}</div>
                 <div style={{ fontSize: 12, color: "#6b778c", marginBottom: 6 }}>{draft.description}</div>
                 {[["Goals", draft.goals], ["Pain Points", draft.painPoints]].map(([k, v]) => v && (
@@ -1948,7 +1948,7 @@ function EpicsSection({ project, update, setSection }) {
         project.epics.map(e => (
           <div key={e.id} className="card">
             <div style={{ display: "flex", gap: 14, alignItems: "flex-start" }}>
-              <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#e8c547", flexShrink: 0, marginTop: 6 }} />
+              <div style={{ width: 8, height: 8, borderRadius: "50%", background: "#b95000", flexShrink: 0, marginTop: 6 }} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontWeight: 600, fontSize: 14, color: "#172b4d", marginBottom: 4 }}>{e.title}</div>
                 <p style={{ fontSize: 12, color: "#6b778c", lineHeight: 1.55, marginBottom: 10 }}>{e.description}</p>
@@ -2174,7 +2174,7 @@ Generate immediately from a solid description. Ask at most ONE clarifying questi
 
         {step === "preview" && preview && (
           <div style={{ borderTop: "1px solid #dfe1e6", padding: 14, background: "#f1f2f4" }}>
-            <div style={{ fontSize: 10, color: "#e8c547", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>Generated Epic</div>
+            <div style={{ fontSize: 10, color: "#b95000", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>Generated Epic</div>
             <div style={{ fontWeight: 700, fontSize: 14, color: "#172b4d", marginBottom: 6 }}>{preview.title}</div>
             <div style={{ fontSize: 12, color: "#6b778c", lineHeight: 1.65 }}>{preview.description}</div>
           </div>
@@ -2220,7 +2220,7 @@ function ACBlock({ ac }) {
               const val = line.slice(pipeIdx + 1).trim();
               return (
                 <div key={li} style={{ display: "flex", gap: 10, fontSize: 11, fontFamily: "'DM Mono',monospace", lineHeight: 1.9 }}>
-                  <span style={{ color: kwColor[kw] || "#e8c547", minWidth: 44, fontWeight: 600, flexShrink: 0 }}>{kw}</span>
+                  <span style={{ color: kwColor[kw] || "#b95000", minWidth: 44, fontWeight: 600, flexShrink: 0 }}>{kw}</span>
                   <span style={{ color: "#505f79" }}>{val}</span>
                 </div>
               );
@@ -2550,7 +2550,7 @@ Generate ${existing > 0 ? "additional" : "comprehensive"} test cases. Return onl
             {/* Single story preview */}
             {convoStep === "preview" && !splitStories && form.title && (
               <div style={{ borderTop: "1px solid #dfe1e6", padding: 14, background: "#f1f2f4" }}>
-                <div style={{ fontSize: 10, color: "#e8c547", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>Generated Story</div>
+                <div style={{ fontSize: 10, color: "#b95000", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>Generated Story</div>
                 <div style={{ fontWeight: 700, fontSize: 13, color: "#172b4d", marginBottom: 4 }}>{form.title}</div>
                 {form.description && <div style={{ fontSize: 12, color: "#6b778c", fontStyle: "italic", marginBottom: 8 }}>{form.description}</div>}
                 <ACBlock ac={form.ac} />
@@ -2564,7 +2564,7 @@ Generate ${existing > 0 ? "additional" : "comprehensive"} test cases. Return onl
             {/* Split stories preview */}
             {convoStep === "preview" && splitStories && (
               <div style={{ borderTop: "1px solid #dfe1e6", padding: 14, background: "#f1f2f4", overflowY: "auto", maxHeight: 220 }}>
-                <div style={{ fontSize: 10, color: "#e8c547", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>
+                <div style={{ fontSize: 10, color: "#b95000", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>
                   {splitStories.length} Stories Detected
                 </div>
                 {splitStories.map((s, i) => (
@@ -2934,7 +2934,7 @@ Generate immediately from a clear description. Only ask ONE short question if so
 
             {convoStep === "preview" && (
               <div style={{ borderTop: "1px solid #dfe1e6", padding: 14, background: "#f1f2f4" }}>
-                <div style={{ fontSize: 10, color: "#e8c547", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>Generated Report</div>
+                <div style={{ fontSize: 10, color: "#b95000", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>Generated Report</div>
                 <div style={{ fontWeight: 700, fontSize: 13, color: "#172b4d", marginBottom: 10 }}>{form.title}</div>
                 {[["Steps", form.steps, "#6b778c"], ["Expected", form.expected, "#36b37e"], ["Current", form.current, "#de350b"], ["Suggestions", form.suggestions, "#b95000"]].map(([k, v, c]) => v && (
                   <div key={k} style={{ marginBottom: 8 }}>
@@ -3097,7 +3097,7 @@ Generate immediately from a good description. Only ask ONE question if truly unc
 
             {convoStep === "preview" && (
               <div style={{ borderTop: "1px solid #dfe1e6", padding: 14, background: "#f1f2f4" }}>
-                <div style={{ fontSize: 10, color: "#e8c547", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>Generated Brief</div>
+                <div style={{ fontSize: 10, color: "#b95000", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>Generated Brief</div>
                 <div style={{ fontWeight: 700, fontSize: 13, color: "#172b4d", marginBottom: 6 }}>{form.title}</div>
                 {[["Epic", epicOf(form.epicId)], ["Description", form.desc], ["Objective", form.objective], ["Scenarios", form.scenarios], ["Deliverables", form.deliverables]].map(([k, v]) => v && (
                   <div key={k} style={{ marginBottom: 6 }}>
@@ -3273,7 +3273,7 @@ function TeamSection({ project, update }) {
                   const memberVacs = vacations.filter(v => v.memberId === m.id);
                   return (
                     <div key={m.id} className="card" style={{ display: "flex", alignItems: "flex-start", gap: 14, padding: "14px 18px" }}>
-                      <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#ebecf0", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 12, color: "#e8c547", flexShrink: 0 }}>
+                      <div style={{ width: 34, height: 34, borderRadius: "50%", background: "#ebecf0", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 12, color: "#b95000", flexShrink: 0 }}>
                         {m.name.split(" ").map(n => n[0]).join("").slice(0, 2)}
                       </div>
                       <div style={{ flex: 1 }}>
@@ -3300,7 +3300,7 @@ function TeamSection({ project, update }) {
       {tab === "holidays" && (
         <>
           {showHolForm && (
-            <div className="card" style={{ marginBottom: 16, borderColor: "rgba(232,197,71,.2)" }}>
+            <div className="card" style={{ marginBottom: 16, borderColor: "rgba(185,80,0,.25)" }}>
               <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 13, color: "#172b4d", marginBottom: 14 }}>
                 {holForm.id ? "Edit Holiday" : "Add Holiday / Observance"}
               </div>
@@ -3328,7 +3328,7 @@ function TeamSection({ project, update }) {
             </div>
           )}
           <div className="two-col">
-            <HolidayCol country="Costa Rica" flag="🇨🇷" accent="#e8c547" />
+            <HolidayCol country="Costa Rica" flag="🇨🇷" accent="#b95000" />
             <HolidayCol country="US" flag="🇺🇸" accent="#0052cc" />
           </div>
         </>
@@ -3338,7 +3338,7 @@ function TeamSection({ project, update }) {
       {tab === "vacations" && (
         <>
           {showVacForm && (
-            <div className="card" style={{ marginBottom: 16, borderColor: "rgba(232,197,71,.2)" }}>
+            <div className="card" style={{ marginBottom: 16, borderColor: "rgba(185,80,0,.25)" }}>
               <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 13, color: "#172b4d", marginBottom: 14 }}>New Vacation</div>
               <div className="field">
                 <label>Team Member</label>
@@ -3363,7 +3363,7 @@ function TeamSection({ project, update }) {
           ) : (
             vacations.map(v => (
               <div key={v.id} className="card" style={{ display: "flex", alignItems: "center", gap: 14 }}>
-                <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#ebecf0", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 11, color: "#e8c547", flexShrink: 0 }}>
+                <div style={{ width: 30, height: 30, borderRadius: "50%", background: "#ebecf0", display: "flex", alignItems: "center", justifyContent: "center", fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 11, color: "#b95000", flexShrink: 0 }}>
                   {memberName(v.memberId).split(" ").map(n => n[0]).join("").slice(0, 2)}
                 </div>
                 <div style={{ flex: 1 }}>
@@ -3472,7 +3472,7 @@ function SprintSection({ project, update }) {
   const designCount = designTasks.length;
   const designPct = Math.min(Math.round((designCount / Math.max(adjustedDesignCapacity / 5, 1)) * 100), 150);
 
-  const commitColor = pct => pct > 100 ? "#de350b" : pct >= 80 ? "#36b37e" : "#e8c547";
+  const commitColor = pct => pct > 100 ? "#de350b" : pct >= 80 ? "#36b37e" : "#b95000";
   const commitLabel = pct => pct > 100 ? "Overcommitted" : pct >= 80 ? "On target" : "Underloaded";
   const toggle = id => setSelected(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
 
@@ -3534,7 +3534,7 @@ function SprintSection({ project, update }) {
         <div>
           <div className="sec-title">Sprint Planning</div>
           <div style={{ fontSize: 12, color: "#97a0af", marginTop: 4, display: "flex", gap: 12, alignItems: "center" }}>
-            <span>Base velocity: <span style={{ color: "#e8c547" }}>{project.velocity}pt</span></span>
+            <span>Base velocity: <span style={{ color: "#b95000" }}>{project.velocity}pt</span></span>
             <span>Design: <span style={{ color: "#d6547e" }}>{project.designVelocity || 20}pt</span></span>
             <button className="btn btn-ghost btn-xs" onClick={() => { setVelForm({ velocity: project.velocity, designVelocity: project.designVelocity || 20 }); setEditVelocity(true); }}><Edit2 size={10} /> Edit</button>
           </div>
@@ -3552,7 +3552,7 @@ function SprintSection({ project, update }) {
           <div className="field" style={{ marginBottom: 0, minWidth: 150 }}><label>Sprint End</label><input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} /></div>
           <div style={{ display: "flex", gap: 20, paddingBottom: 2 }}>
             <div><div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>Working Days</div><div style={{ fontSize: 20, fontFamily: "'Syne',sans-serif", fontWeight: 700, color: "#172b4d" }}>{totalWorkDays}</div></div>
-            <div><div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>Adj. Capacity</div><div style={{ fontSize: 20, fontFamily: "'Syne',sans-serif", fontWeight: 700, color: "#e8c547" }}>{adjustedDevCapacity}pt</div></div>
+            <div><div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>Adj. Capacity</div><div style={{ fontSize: 20, fontFamily: "'Syne',sans-serif", fontWeight: 700, color: "#b95000" }}>{adjustedDevCapacity}pt</div></div>
             {vacImpact.length > 0 && <div><div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>Vacation Days</div><div style={{ fontSize: 20, fontFamily: "'Syne',sans-serif", fontWeight: 700, color: "#de350b" }}>{vacImpact.reduce((a, v) => a + v.days, 0)}</div></div>}
           </div>
         </div>
@@ -3561,7 +3561,7 @@ function SprintSection({ project, update }) {
             {sprintHolidays.length > 0 && (
               <div>
                 <div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 6 }}>Holidays in Sprint</div>
-                {sprintHolidays.map((h, i) => <div key={i} style={{ display: "flex", gap: 8, fontSize: 12, color: "#6b778c", marginBottom: 3 }}><span style={{ color: "#e8c547", fontFamily: "'DM Mono',monospace", fontSize: 11 }}>{h.date}</span><span>{h.name}</span></div>)}
+                {sprintHolidays.map((h, i) => <div key={i} style={{ display: "flex", gap: 8, fontSize: 12, color: "#6b778c", marginBottom: 3 }}><span style={{ color: "#b95000", fontFamily: "'DM Mono',monospace", fontSize: 11 }}>{h.date}</span><span>{h.name}</span></div>)}
               </div>
             )}
             {vacImpact.length > 0 && (
@@ -3581,16 +3581,16 @@ function SprintSection({ project, update }) {
         <CommitBar label="Design Team" pts={`${designCount} tasks`} capacity={`${adjustedDesignCapacity}pt est.`} pct={designPct} accent={commitColor(designPct)} />
       </div>
 
-      {suggestion && <div style={{ marginBottom: 16, padding: "10px 14px", background: "rgba(232,197,71,.08)", border: "1px solid rgba(232,197,71,.2)", borderRadius: 8, fontSize: 13, color: "#e8c547" }}>{suggestion}</div>}
+      {suggestion && <div style={{ marginBottom: 16, padding: "10px 14px", background: "rgba(232,197,71,.08)", border: "1px solid rgba(185,80,0,.25)", borderRadius: 8, fontSize: 13, color: "#b95000" }}>{suggestion}</div>}
 
       {/* Sprint scope */}
       <div style={{ marginBottom: 14 }}>
         <div className="sprint-lane">
-          <div className="sprint-lane-title" style={{ color: devPct > 100 ? "#de350b" : "#e8c547" }}>Sprint · {devPts}pt{devPct > 100 ? " ⚠ over" : ""}</div>
+          <div className="sprint-lane-title" style={{ color: devPct > 100 ? "#de350b" : "#b95000" }}>Sprint · {devPts}pt{devPct > 100 ? " ⚠ over" : ""}</div>
           {planned.length === 0 && <div style={{ fontSize: 12, color: "#b3bac5", textAlign: "center", padding: "20px 0" }}>No stories selected — click from backlog below</div>}
           <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
             {planned.map(s => { const tag = s.title.match(/\[(FE|BE|FS|Mobile|QA|Designer)\]/)?.[1]; return (
-              <div key={s.id} className="sprint-item" style={{ borderColor: devPct > 100 ? "rgba(222,53,11,.2)" : "rgba(232,197,71,.2)", minWidth: 200, flex: "1 1 200px" }} onClick={() => toggle(s.id)}>
+              <div key={s.id} className="sprint-item" style={{ borderColor: devPct > 100 ? "rgba(222,53,11,.2)" : "rgba(185,80,0,.25)", minWidth: 200, flex: "1 1 200px" }} onClick={() => toggle(s.id)}>
                 <div style={{ display: "flex", gap: 6, alignItems: "center", marginBottom: 4 }}>{tag && <TeamTag team={tag} />}<span style={{ fontSize: 12, color: "#344563", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{s.title.replace(/\[.*?\]\s*/, "")}</span></div>
                 <div style={{ display: "flex", gap: 6 }}><span className="badge badge-accent">{s.teamPts ?? s.aiPts ?? "?"}pts</span><span style={{ fontSize: 10, color: "#8993a4" }}>× remove</span></div>
               </div>
@@ -3622,8 +3622,8 @@ function SprintSection({ project, update }) {
             return (
               <div key={sp.id} className="card" style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 18px" }}>
                 <span className="tag tag-green">Sprint {i + 1}</span>
-                <span style={{ fontSize: 13, color: "#505f79" }}>{completed} done · <span style={{ color: "#e8c547", fontWeight: 600 }}>{sp.pts}pt</span></span>
-                {incompleted > 0 && <span style={{ fontSize: 12, color: "#e8c547" }}>{incompleted} not done</span>}
+                <span style={{ fontSize: 13, color: "#505f79" }}>{completed} done · <span style={{ color: "#b95000", fontWeight: 600 }}>{sp.pts}pt</span></span>
+                {incompleted > 0 && <span style={{ fontSize: 12, color: "#b95000" }}>{incompleted} not done</span>}
                 {sp.startDate && <span style={{ fontSize: 11, color: "#97a0af", fontFamily: "'DM Mono',monospace" }}>{sp.startDate} → {sp.endDate}</span>}
                 <span style={{ flex: 1 }} />
                 <CheckCircle2 size={14} color="#36b37e" />
@@ -3632,7 +3632,7 @@ function SprintSection({ project, update }) {
           })}
           {project.sprints.length > 1 && (
             <div style={{ marginTop: 10, padding: "10px 14px", background: "#f8f9fa", border: "1px solid #dfe1e6", borderRadius: 8, display: "flex", gap: 20 }}>
-              <div><div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>Avg Velocity</div><div style={{ fontSize: 18, fontFamily: "'Syne',sans-serif", fontWeight: 700, color: "#e8c547" }}>{Math.round(project.sprints.reduce((a, s) => a + s.pts, 0) / project.sprints.length)}pt</div></div>
+              <div><div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>Avg Velocity</div><div style={{ fontSize: 18, fontFamily: "'Syne',sans-serif", fontWeight: 700, color: "#b95000" }}>{Math.round(project.sprints.reduce((a, s) => a + s.pts, 0) / project.sprints.length)}pt</div></div>
               <div><div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>Total Sprints</div><div style={{ fontSize: 18, fontFamily: "'Syne',sans-serif", fontWeight: 700, color: "#172b4d" }}>{project.sprints.length}</div></div>
               <div><div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 3 }}>Total Delivered</div><div style={{ fontSize: 18, fontFamily: "'Syne',sans-serif", fontWeight: 700, color: "#36b37e" }}>{project.sprints.reduce((a, s) => a + s.pts, 0)}pt</div></div>
             </div>
@@ -3684,7 +3684,7 @@ function SprintCompleteModal({ planned, startDate, endDate, onComplete, onClose 
         <div style={{ display: "flex", justifyContent: "space-between", width: "100%", alignItems: "center" }}>
           <div style={{ fontSize: 12, color: "#8993a4" }}>
             <span style={{ color: "#36b37e", fontWeight: 600 }}>{completed.size} completed</span>
-            {incompletedCount > 0 && <span> · <span style={{ color: "#e8c547" }}>{incompletedCount} back to backlog</span></span>}
+            {incompletedCount > 0 && <span> · <span style={{ color: "#b95000" }}>{incompletedCount} back to backlog</span></span>}
             <span> · <span style={{ color: "#172b4d", fontWeight: 600 }}>{completedPts}pt</span> velocity</span>
           </div>
           <div style={{ display: "flex", gap: 8 }}>
@@ -3851,10 +3851,10 @@ Be concise. Ask before creating if requirements are unclear.`;
     const typeLabel = { stories: "Story", bugs: "Bug", epics: "Epic", design: "Design Task" }[type] || type;
     return (
       <div style={{ margin: "12px 0 8px", background: "#f8f9fa", border: "1px solid rgba(232,197,71,.25)", borderRadius: 10, overflow: "hidden" }}>
-        <div style={{ padding: "10px 14px", background: "rgba(232,197,71,.12)", borderBottom: "1px solid rgba(232,197,71,.15)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ padding: "10px 14px", background: "rgba(185,80,0,.1)", borderBottom: "1px solid rgba(232,197,71,.15)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <Sparkles size={13} color="#e8c547" />
-            <span style={{ fontSize: 12, fontWeight: 600, color: "#e8c547" }}>{items.length} {typeLabel}{items.length > 1 ? "s" : ""} ready to add</span>
+            <Sparkles size={13} color="#b95000" />
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#b95000" }}>{items.length} {typeLabel}{items.length > 1 ? "s" : ""} ready to add</span>
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             <button className="btn btn-ghost btn-xs" onClick={rejectArtifacts}><X size={11} /> Discard</button>
@@ -3884,7 +3884,7 @@ Be concise. Ask before creating if requirements are unclear.`;
           <div className="sec-sub">Conversational PM assistant — can create stories, bugs, epics & design tasks</div>
         </div>
         {project.aiRules.length > 0 && (
-          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#e8c547" }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#b95000" }}>
             <Shield size={12} /> {project.aiRules.length} rule{project.aiRules.length !== 1 ? "s" : ""}
           </div>
         )}
@@ -3892,7 +3892,7 @@ Be concise. Ask before creating if requirements are unclear.`;
 
       {project.aiRules.length > 0 && (
         <div style={{ marginBottom: 16, padding: "10px 14px", background: "rgba(232,197,71,.1)", border: "1px solid rgba(232,197,71,.15)", borderRadius: 8 }}>
-          <div style={{ fontSize: 10, color: "#e8c547", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 5 }}>Active Project Rules</div>
+          <div style={{ fontSize: 10, color: "#b95000", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 5 }}>Active Project Rules</div>
           {project.aiRules.map((r, i) => <div key={i} style={{ fontSize: 12, color: "#b95000", marginBottom: 2 }}>• {r}</div>)}
         </div>
       )}
@@ -4278,7 +4278,7 @@ Rules:
                   <div>
                     {(generated.aiRules || []).map((r, i) => (
                       <div key={i} className="card-flat" style={{ marginBottom: 8, display: "flex", gap: 8, alignItems: "flex-start" }}>
-                        <Zap size={12} color="#e8c547" style={{ flexShrink: 0, marginTop: 2 }} />
+                        <Zap size={12} color="#b95000" style={{ flexShrink: 0, marginTop: 2 }} />
                         <span style={{ fontSize: 12, color: "#172b4d" }}>{r}</span>
                       </div>
                     ))}
@@ -4551,7 +4551,7 @@ function DiscoveryProjectModal({ onClose, onCreate, onBack }) {
         </>
       ) : (
         <div style={{ textAlign: "center", padding: "40px 24px" }}>
-          <Compass size={32} color="#e8c547" style={{ marginBottom: 16 }} />
+          <Compass size={32} color="#b95000" style={{ marginBottom: 16 }} />
           <div style={{ fontSize: 14, color: "#344563", fontWeight: 500 }}>Setting up your discovery project...</div>
           <div style={{ fontSize: 12, color: "#97a0af", marginTop: 6 }}>Preparing initial assumptions, risks, and a kickoff agenda</div>
         </div>
@@ -4669,10 +4669,10 @@ function DiscoveryOverview({ project, update, setSection }) {
           {phases.map((p, i) => (
             <div key={p} style={{ flex: 1, position: "relative" }}>
               <div style={{ display: "flex", alignItems: "center" }}>
-                <div onClick={() => update({ discoveryPhase: p })} style={{ width: 28, height: 28, borderRadius: "50%", background: i <= cur ? "#e8c547" : "#ebecf0", border: i === cur ? "3px solid #c9a800" : "2px solid " + (i < cur ? "#e8c547" : "#dfe1e6"), display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, zIndex: 1 }}>
-                  {i < cur ? <Check size={12} color="#3d2e00" /> : <span style={{ fontSize: 11, fontWeight: 700, color: i === cur ? "#3d2e00" : "#97a0af" }}>{i + 1}</span>}
+                <div onClick={() => update({ discoveryPhase: p })} style={{ width: 28, height: 28, borderRadius: "50%", background: i <= cur ? "#b95000" : "#ebecf0", border: i === cur ? "3px solid #c45500" : "2px solid " + (i < cur ? "#b95000" : "#dfe1e6"), display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", flexShrink: 0, zIndex: 1 }}>
+                  {i < cur ? <Check size={12} color="#ffffff" /> : <span style={{ fontSize: 11, fontWeight: 700, color: i === cur ? "#ffffff" : "#97a0af" }}>{i + 1}</span>}
                 </div>
-                {i < phases.length - 1 && <div style={{ flex: 1, height: 2, background: i < cur ? "#e8c547" : "#ebecf0" }} />}
+                {i < phases.length - 1 && <div style={{ flex: 1, height: 2, background: i < cur ? "#b95000" : "#ebecf0" }} />}
               </div>
               <div style={{ fontSize: 10, color: i <= cur ? "#344563" : "#97a0af", marginTop: 6, fontWeight: i === cur ? 600 : 400 }}>{phaseLabels[p]}</div>
             </div>
@@ -5583,7 +5583,7 @@ function DiscoveryDocuments({ project, update }) {
         onDrop={onDrop}
         onClick={() => !processing && !pendingFile && fileInputRef.current?.click()}
         style={{
-          border: `2px dashed ${dragOver ? "#e8c547" : "#dfe1e6"}`,
+          border: `2px dashed ${dragOver ? "#b95000" : "#dfe1e6"}`,
           borderRadius: 10, padding: processing ? "28px 24px" : "32px 24px",
           textAlign: "center", cursor: processing ? "default" : "pointer",
           background: dragOver ? "rgba(244,136,0,.06)" : "#fafbfc",
@@ -5599,7 +5599,7 @@ function DiscoveryDocuments({ project, update }) {
           </div>
         ) : (
           <div>
-            <Upload size={24} color={dragOver ? "#e8c547" : "#b3bac5"} style={{ marginBottom: 10 }} />
+            <Upload size={24} color={dragOver ? "#b95000" : "#b3bac5"} style={{ marginBottom: 10 }} />
             <div style={{ fontSize: 13, fontWeight: 600, color: "#344563", marginBottom: 4 }}>
               {dragOver ? "Drop it here" : "Drop a file or click to upload"}
             </div>
@@ -5870,7 +5870,7 @@ function DiscoveryTodos({ project, update }) {
               {suggestions.map((s, i) => (
                 <div key={s.id} style={{ display: "flex", alignItems: "flex-start", gap: 12, padding: "10px 0", borderBottom: i < suggestions.length - 1 ? "1px solid #ebecf0" : "none" }}>
                   <input type="checkbox" checked={s._selected} onChange={e => update({ _todoSuggestions: suggestions.map((p, j) => j === i ? { ...p, _selected: e.target.checked } : p) })}
-                    style={{ marginTop: 3, accentColor: "#e8c547", flexShrink: 0 }} />
+                    style={{ marginTop: 3, accentColor: "#b95000", flexShrink: 0 }} />
                   <div style={{ flex: 1 }}>
                     <div style={{ fontSize: 13, color: "#172b4d", fontWeight: 500, marginBottom: 3 }}>{s.task}</div>
                     <div style={{ display: "flex", gap: 6 }}>
@@ -6081,10 +6081,10 @@ Be direct. Be specific to this project. Reference what's already known. Challeng
     const typeLabel = { risks: "Risk", opportunities: "Opportunity", assumptions: "Assumption", flows: "User Flow", todos: "Task" }[type] || type;
     return (
       <div style={{ margin: "12px 0 8px", background: "#f8f9fa", border: "1px solid rgba(232,197,71,.25)", borderRadius: 10, overflow: "hidden" }}>
-        <div style={{ padding: "10px 14px", background: "rgba(232,197,71,.12)", borderBottom: "1px solid rgba(232,197,71,.15)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <div style={{ padding: "10px 14px", background: "rgba(185,80,0,.1)", borderBottom: "1px solid rgba(232,197,71,.15)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <Sparkles size={13} color="#e8c547" />
-            <span style={{ fontSize: 12, fontWeight: 600, color: "#e8c547" }}>{items.length} {typeLabel}{items.length > 1 ? "s" : ""} ready to add</span>
+            <Sparkles size={13} color="#b95000" />
+            <span style={{ fontSize: 12, fontWeight: 600, color: "#b95000" }}>{items.length} {typeLabel}{items.length > 1 ? "s" : ""} ready to add</span>
           </div>
           <div style={{ display: "flex", gap: 6 }}>
             <button className="btn btn-ghost btn-xs" onClick={rejectArtifacts}><X size={11} /> Discard</button>
@@ -7025,7 +7025,7 @@ function TeamEstimation({ project, update }) {
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
           <ScenarioCard scenarioKey="lean" data={scenarios.lean} color="#36b37e" label="Lean" />
           <ScenarioCard scenarioKey="balanced" data={scenarios.balanced} color="#0052cc" label="Balanced" />
-          <ScenarioCard scenarioKey="accelerated" data={scenarios.accelerated} color="#e8c547" label="Accelerated" />
+          <ScenarioCard scenarioKey="accelerated" data={scenarios.accelerated} color="#b95000" label="Accelerated" />
         </div>
       )}
 
@@ -7186,7 +7186,7 @@ function DiscoveryPresentation({ project, update, onGraduate }) {
 
       {/* Executive narrative */}
       {(narrative || generating) && (
-        <div className="card" style={{ marginBottom: 20, borderLeft: "4px solid #e8c547" }}>
+        <div className="card" style={{ marginBottom: 20, borderLeft: "4px solid #b95000" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
             <div style={{ fontSize: 13, fontWeight: 700, color: "#172b4d", fontFamily: "'Syne',sans-serif" }}>Executive Summary</div>
             <button className="btn btn-ghost btn-xs" onClick={() => navigator.clipboard.writeText(narrative)}><Copy size={11} /> Copy</button>
