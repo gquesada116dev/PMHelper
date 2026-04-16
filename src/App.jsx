@@ -6197,7 +6197,9 @@ Be direct. Be specific to this project. Reference what's already known. Challeng
 // ─── Story Mapping ─────────────────────────────────────────────────────────────
 function StoryMappingSection({ project, update }) {
   const [generating, setGenerating] = useState(false);
-  const [editingStage, setEditingStage] = useState(null);
+  const [editingStage, setEditingStage] = useState(null); // stageId being edited
+  const [draggingId, setDraggingId] = useState(null);
+  const [dragOverId, setDragOverId] = useState(null);
   const backbone = project.backbone || [];
   const storyMap = project.storyMap || [];
 
@@ -6230,6 +6232,21 @@ function StoryMappingSection({ project, update }) {
   const updateFeature = (stageId, epicId, featId, changes) => {
     const updated = backbone.map(s => s.id === stageId ? { ...s, epics: (s.epics || []).map(e => e.id === epicId ? { ...e, features: (e.features || []).map(f => f.id === featId ? { ...f, ...changes } : f) } : e) } : s);
     update({ backbone: updated, storyMap: updated });
+  };
+
+  const updateStage = (stageId, changes) => {
+    const updated = backbone.map(s => s.id === stageId ? { ...s, ...changes } : s);
+    update({ backbone: updated, storyMap: updated });
+  };
+
+  const moveStage = (fromId, toId) => {
+    const from = backbone.findIndex(s => s.id === fromId);
+    const to = backbone.findIndex(s => s.id === toId);
+    if (from === -1 || to === -1 || from === to) return;
+    const reordered = [...backbone];
+    const [moved] = reordered.splice(from, 1);
+    reordered.splice(to, 0, moved);
+    update({ backbone: reordered, storyMap: reordered });
   };
 
   const MoscowBadge = ({ value, onChange }) => {
@@ -6292,22 +6309,62 @@ function StoryMappingSection({ project, update }) {
           {/* Horizontal scroll story map */}
           <div style={{ overflowX: "auto", paddingBottom: 12 }}>
             <div style={{ display: "flex", gap: 14, minWidth: "max-content" }}>
-              {backbone.map(stage => (
-                <div key={stage.id} style={{ width: 240, flexShrink: 0 }}>
+              {backbone.map(stage => {
+                const isEditing = editingStage === stage.id;
+                const isDragging = draggingId === stage.id;
+                const isDragOver = dragOverId === stage.id && draggingId !== stage.id;
+                return (
+                <div key={stage.id} style={{ width: 240, flexShrink: 0, opacity: isDragging ? 0.4 : 1, transition: "opacity .15s, outline .1s", outline: isDragOver ? "2px dashed #0052cc" : "2px solid transparent", borderRadius: 8 }}
+                  draggable
+                  onDragStart={e => { setDraggingId(stage.id); e.dataTransfer.effectAllowed = "move"; }}
+                  onDragEnd={() => { setDraggingId(null); setDragOverId(null); }}
+                  onDragOver={e => { e.preventDefault(); if (draggingId && draggingId !== stage.id) setDragOverId(stage.id); }}
+                  onDragLeave={() => setDragOverId(null)}
+                  onDrop={e => { e.preventDefault(); if (draggingId) moveStage(draggingId, stage.id); setDraggingId(null); setDragOverId(null); }}>
+
                   {/* Backbone stage header */}
-                  <div style={{ background: "#172b4d", color: "#ffffff", borderRadius: "8px 8px 0 0", padding: "10px 12px", marginBottom: 2, display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontSize: 12, fontWeight: 700 }}>{stage.stage}</div>
-                      <div style={{ fontSize: 10, color: "#b3bac5", marginTop: 2 }}>{stage.description}</div>
+                  <div style={{ background: "#172b4d", color: "#ffffff", borderRadius: "8px 8px 0 0", padding: "10px 12px", marginBottom: 2, display: "flex", alignItems: "flex-start", gap: 6 }}>
+                    {/* Drag handle */}
+                    <GripVertical size={13} style={{ color: "#556270", cursor: "grab", flexShrink: 0, marginTop: 2 }} />
+
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      {isEditing ? (
+                        <>
+                          <input autoFocus value={stage.stage}
+                            onChange={e => updateStage(stage.id, { stage: e.target.value })}
+                            onKeyDown={e => { if (e.key === "Enter") e.currentTarget.nextElementSibling?.focus(); if (e.key === "Escape") setEditingStage(null); }}
+                            style={{ fontSize: 12, fontWeight: 700, background: "rgba(255,255,255,.15)", border: "1px solid rgba(255,255,255,.35)", borderRadius: 4, color: "#fff", padding: "3px 6px", width: "100%", outline: "none" }} />
+                          <input value={stage.description || ""}
+                            onChange={e => updateStage(stage.id, { description: e.target.value })}
+                            onKeyDown={e => { if (e.key === "Enter" || e.key === "Escape") setEditingStage(null); }}
+                            placeholder="Stage description…"
+                            style={{ fontSize: 10, background: "rgba(255,255,255,.1)", border: "1px solid rgba(255,255,255,.2)", borderRadius: 4, color: "#c1c7d0", padding: "2px 6px", width: "100%", marginTop: 4, outline: "none" }} />
+                          <button onClick={() => setEditingStage(null)}
+                            style={{ marginTop: 5, fontSize: 10, padding: "2px 8px", background: "rgba(255,255,255,.15)", border: "1px solid rgba(255,255,255,.25)", borderRadius: 4, color: "#fff", cursor: "pointer" }}>
+                            Done
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <div style={{ fontSize: 12, fontWeight: 700, cursor: "text" }} onClick={() => setEditingStage(stage.id)}>{stage.stage}</div>
+                          <div style={{ fontSize: 10, color: "#b3bac5", marginTop: 2, cursor: "text" }} onClick={() => setEditingStage(stage.id)}>{stage.description || <span style={{ opacity: .45 }}>click to add description</span>}</div>
+                        </>
+                      )}
                     </div>
-                    <button
-                      onClick={() => { if (window.confirm(`Delete stage "${stage.stage}" and all its epics?`)) { const up = backbone.filter(s => s.id !== stage.id); update({ backbone: up, storyMap: up }); } }}
-                      title="Delete stage"
-                      style={{ background: "transparent", border: "none", cursor: "pointer", color: "#8993a4", padding: 2, flexShrink: 0, lineHeight: 1, borderRadius: 4, transition: "color .12s" }}
-                      onMouseEnter={e => e.currentTarget.style.color = "#ff7452"}
-                      onMouseLeave={e => e.currentTarget.style.color = "#8993a4"}>
-                      <Trash2 size={12} />
-                    </button>
+
+                    <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
+                      <button onClick={() => setEditingStage(isEditing ? null : stage.id)} title="Edit stage name"
+                        style={{ background: "transparent", border: "none", cursor: "pointer", color: isEditing ? "#4fc3f7" : "#8993a4", padding: 2, borderRadius: 4, transition: "color .12s" }}>
+                        <Edit2 size={11} />
+                      </button>
+                      <button onClick={() => { if (window.confirm(`Delete stage "${stage.stage}" and all its epics?`)) { const up = backbone.filter(s => s.id !== stage.id); update({ backbone: up, storyMap: up }); } }}
+                        title="Delete stage"
+                        style={{ background: "transparent", border: "none", cursor: "pointer", color: "#8993a4", padding: 2, borderRadius: 4, transition: "color .12s" }}
+                        onMouseEnter={e => e.currentTarget.style.color = "#ff7452"}
+                        onMouseLeave={e => e.currentTarget.style.color = "#8993a4"}>
+                        <Trash2 size={12} />
+                      </button>
+                    </div>
                   </div>
 
                   {/* Epics */}
@@ -6347,7 +6404,8 @@ function StoryMappingSection({ project, update }) {
                     + epic
                   </button>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
