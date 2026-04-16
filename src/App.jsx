@@ -384,7 +384,7 @@ function SyncModal({ project, update, onClose }) {
             </div>
           ) : (
             <div>
-              <div style={{ background: "rgba(232,197,71,.1)", border: "1px solid rgba(232,197,71,.15)", borderRadius: 8, padding: "12px 14px", marginBottom: 18, fontSize: 12, color: "#7a6000", lineHeight: 1.65 }}>
+              <div style={{ background: "rgba(232,197,71,.1)", border: "1px solid rgba(232,197,71,.15)", borderRadius: 8, padding: "12px 14px", marginBottom: 18, fontSize: 12, color: "#b95000", lineHeight: 1.65 }}>
                 API token stays in your browser only — never sent anywhere except your own Jira instance.
                 Generate one at <span style={{ color: "#0052cc" }}>id.atlassian.com → Security → API tokens</span>.
               </div>
@@ -611,7 +611,7 @@ body{background:#f4f5f7}
 .app{display:flex;height:100vh;background:#f4f5f7;color:#172b4d;font-family:'DM Sans',sans-serif;overflow:hidden;font-size:14px}
 .sbar{width:224px;min-width:224px;background:#ffffff;border-right:1px solid #dfe1e6;display:flex;flex-direction:column;height:100vh;overflow:hidden;box-shadow:1px 0 0 #dfe1e6}
 .sbar-logo{padding:18px 16px 14px;display:flex;align-items:center;gap:8px;border-bottom:1px solid #ebecf0}
-.sbar-logo-mark{width:28px;height:28px;background:#e8c547;border-radius:6px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.sbar-logo-mark{width:28px;height:28px;background:#ff991f;border-radius:6px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
 .sbar-logo h2{font-family:'Syne',sans-serif;font-size:14px;font-weight:700;letter-spacing:-.02em;color:#172b4d}
 .sbar-logo span{color:#8993a4;font-weight:600}
 .sbar-proj-area{padding:10px 10px;border-bottom:1px solid #ebecf0;position:relative}
@@ -632,7 +632,7 @@ body{background:#f4f5f7}
 .nav-item.active .nav-icon{color:#0052cc}
 .nav-icon{flex-shrink:0;opacity:.8}
 .sbar-footer{padding:10px 10px;border-top:1px solid #ebecf0}
-.new-proj-btn{width:100%;display:flex;align-items:center;gap:7px;padding:8px 10px;background:rgba(232,197,71,.1);border:1px solid rgba(232,197,71,.4);border-radius:7px;cursor:pointer;color:#7a6000;font-size:12px;font-weight:600;font-family:'DM Sans',sans-serif;transition:all .15s}
+.new-proj-btn{width:100%;display:flex;align-items:center;gap:7px;padding:8px 10px;background:rgba(232,197,71,.1);border:1px solid rgba(232,197,71,.4);border-radius:7px;cursor:pointer;color:#b95000;font-size:12px;font-weight:600;font-family:'DM Sans',sans-serif;transition:all .15s}
 .new-proj-btn:hover{background:rgba(232,197,71,.2);border-color:rgba(232,197,71,.6)}
 .main{flex:1;overflow-y:auto;padding:32px 36px 48px;background:#f4f5f7}
 .sec-head{display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:28px;gap:16px}
@@ -640,11 +640,11 @@ body{background:#f4f5f7}
 .sec-sub{font-size:12px;color:#97a0af;margin-top:4px;font-weight:400}
 .sec-actions{display:flex;gap:8px;align-items:center;flex-shrink:0}
 .btn{display:inline-flex;align-items:center;gap:6px;border-radius:7px;font-size:13px;font-weight:500;cursor:pointer;transition:all .15s;border:none;font-family:'DM Sans',sans-serif;padding:8px 14px;white-space:nowrap;line-height:1}
-.btn-primary{background:#e8c547;color:#3d2e00}
+.btn-primary{background:#ff991f;color:#3d2e00}
 .btn-primary:hover{background:#f5d35a;transform:translateY(-1px);box-shadow:0 2px 8px rgba(232,197,71,.4)}
 .btn-ghost{background:transparent;color:#505f79;border:1px solid #dfe1e6}
 .btn-ghost:hover{background:#f4f5f7;color:#172b4d;border-color:#c1c7d0}
-.btn-ai{background:rgba(232,197,71,.1);color:#7a6000;border:1px solid rgba(232,197,71,.4)}
+.btn-ai{background:rgba(232,197,71,.1);color:#b95000;border:1px solid rgba(232,197,71,.4)}
 .btn-ai:hover{background:rgba(232,197,71,.2);border-color:rgba(232,197,71,.6)}
 .btn-danger{background:transparent;color:#de350b;border:1px solid rgba(222,53,11,.25)}
 .btn-danger:hover{background:rgba(222,53,11,.08)}
@@ -663,16 +663,16 @@ body{background:#f4f5f7}
 .tag-FE{background:#e3fcef;color:#00632b}
 .tag-BE{background:#e6f0ff;color:#0747a6}
 .tag-FS{background:#f3e6ff;color:#5b21b6}
-.tag-Mobile{background:#fff8e1;color:#7a5c00}
+.tag-Mobile{background:#fff0e6;color:#b95000}
 .tag-QA{background:#e6f7ff;color:#0055b3}
 .tag-Designer{background:#fff0f6;color:#991b5b}
 .tag-BUG{background:#ffebe6;color:#bf2600}
 .tag-Design{background:#fff0f6;color:#991b5b}
-.tag-accent{background:rgba(232,197,71,.15);color:#7a6000}
+.tag-accent{background:rgba(232,197,71,.15);color:#b95000}
 .tag-muted{background:#f1f2f4;color:#6b778c}
 .tag-green{background:#e3fcef;color:#00632b}
 .badge{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;border-radius:4px;font-size:10px;font-weight:600;font-family:'DM Mono',monospace;padding:0 4px;background:#f1f2f4;color:#6b778c}
-.badge-accent{background:rgba(232,197,71,.15);color:#7a6000}
+.badge-accent{background:rgba(232,197,71,.15);color:#b95000}
 .divider{height:1px;background:#ebecf0;margin:16px 0}
 .row{display:flex;gap:12px}
 .row>.field{flex:1;min-width:0}
@@ -697,7 +697,7 @@ textarea{resize:vertical;min-height:70px}
 .empty p{font-size:12px;color:#b3bac5}
 .ai-bubble{border-radius:10px;padding:12px 14px;margin-bottom:8px;font-size:13px;line-height:1.7;max-width:84%;white-space:pre-wrap;word-break:break-word}
 .ai-bubble-bot{background:#f4f5f7;color:#344563;margin-right:auto;border-bottom-left-radius:3px;border:1px solid #ebecf0}
-.ai-bubble-user{background:#e8c547;color:#3d2e00;margin-left:auto;border-bottom-right-radius:3px;font-weight:500}
+.ai-bubble-user{background:#ff991f;color:#3d2e00;margin-left:auto;border-bottom-right-radius:3px;font-weight:500}
 .ai-typing{display:inline-flex;align-items:center;gap:4px;padding:8px 12px}
 .ai-dot{width:5px;height:5px;border-radius:50%;background:#b3bac5;animation:bounce 1.2s infinite}
 .ai-dot:nth-child(2){animation-delay:.2s}
@@ -713,12 +713,12 @@ textarea{resize:vertical;min-height:70px}
 .ac-val{font-size:12px;color:#505f79;line-height:1.5}
 .pts-row{display:inline-flex;gap:6px;align-items:center}
 .pts-chip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:5px;font-size:11px;font-family:'DM Mono',monospace}
-.pts-ai{background:rgba(232,197,71,.12);color:#7a6000;border:1px solid rgba(232,197,71,.3)}
+.pts-ai{background:rgba(232,197,71,.12);color:#b95000;border:1px solid rgba(232,197,71,.3)}
 .pts-team{background:#e3fcef;color:#00632b;border:1px solid #abf5d1}
 .pts-empty{background:#f1f2f4;color:#8993a4;border:1px solid #dfe1e6}
 .step-dots{display:flex;gap:5px;margin-bottom:20px}
 .step-dot{width:6px;height:6px;border-radius:50%;background:#dfe1e6;transition:background .2s}
-.step-dot.on{background:#e8c547}
+.step-dot.on{background:#ff991f}
 .influence-H{color:#e8c547}
 .influence-M{color:#0052cc}
 .influence-L{color:#97a0af}
@@ -728,7 +728,7 @@ textarea{resize:vertical;min-height:70px}
 .sprint-item:hover{border-color:#b3bac5;box-shadow:0 2px 6px rgba(9,30,66,.1)}
 .health-row{display:flex;align-items:center;gap:6px;font-size:12px;color:#6b778c;margin-bottom:6px}
 .dot-green{width:7px;height:7px;border-radius:50%;background:#36b37e;flex-shrink:0}
-.dot-yellow{width:7px;height:7px;border-radius:50%;background:#e8c547;flex-shrink:0}
+.dot-yellow{width:7px;height:7px;border-radius:50%;background:#ff991f;flex-shrink:0}
 .dot-red{width:7px;height:7px;border-radius:50%;background:#de350b;flex-shrink:0}
 .two-col{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 @media(max-width:700px){.two-col{grid-template-columns:1fr}.sbar{display:none}.stat-grid{grid-template-columns:1fr 1fr}}
@@ -1091,7 +1091,7 @@ function Sidebar({ projects, pid, setPid, section, setSection, onNew, jiraConnec
               <div key={p.id} className={`sbar-dropdown-item${p.id === pid ? " sel" : ""}`}
                 onClick={() => { setPid(p.id); setOpen(false); }}>
                 <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                  {p.mode === "discovery" && <span style={{ fontSize: 9, fontWeight: 700, color: "#7a6000", background: "#fff8e1", padding: "1px 5px", borderRadius: 3, fontFamily: "'DM Mono',monospace" }}>DISC</span>}
+                  {p.mode === "discovery" && <span style={{ fontSize: 9, fontWeight: 700, color: "#b95000", background: "#fff0e6", padding: "1px 5px", borderRadius: 3, fontFamily: "'DM Mono',monospace" }}>DISC</span>}
                   <span>{p.name}</span>
                 </div>
                 {p.id === pid && <Check size={12} />}
@@ -1295,8 +1295,8 @@ function StakeholdersSection({ project, update }) {
     setSuggestions([]);
   };
 
-  const influenceColor = { High: "#de350b", Medium: "#7a5c00", Low: "#42526e" };
-  const influenceBg   = { High: "#ffebe6", Medium: "#fff8e1", Low: "#f1f2f4" };
+  const influenceColor = { High: "#de350b", Medium: "#b95000", Low: "#42526e" };
+  const influenceBg   = { High: "#ffebe6", Medium: "#fff0e6", Low: "#f1f2f4" };
 
   const StakeholderCard = ({ s }) => (
     <div key={s.id} className="card" style={{ display: "flex", alignItems: "flex-start", gap: 14 }}>
@@ -2936,7 +2936,7 @@ Generate immediately from a clear description. Only ask ONE short question if so
               <div style={{ borderTop: "1px solid #dfe1e6", padding: 14, background: "#f1f2f4" }}>
                 <div style={{ fontSize: 10, color: "#e8c547", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 10 }}>Generated Report</div>
                 <div style={{ fontWeight: 700, fontSize: 13, color: "#172b4d", marginBottom: 10 }}>{form.title}</div>
-                {[["Steps", form.steps, "#6b778c"], ["Expected", form.expected, "#36b37e"], ["Current", form.current, "#de350b"], ["Suggestions", form.suggestions, "#7a6000"]].map(([k, v, c]) => v && (
+                {[["Steps", form.steps, "#6b778c"], ["Expected", form.expected, "#36b37e"], ["Current", form.current, "#de350b"], ["Suggestions", form.suggestions, "#b95000"]].map(([k, v, c]) => v && (
                   <div key={k} style={{ marginBottom: 8 }}>
                     <div style={{ fontSize: 10, color: "#97a0af", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".05em", marginBottom: 2 }}>{k}</div>
                     <div style={{ fontSize: 12, color: c, whiteSpace: "pre-wrap" }}>{v}</div>
@@ -3893,7 +3893,7 @@ Be concise. Ask before creating if requirements are unclear.`;
       {project.aiRules.length > 0 && (
         <div style={{ marginBottom: 16, padding: "10px 14px", background: "rgba(232,197,71,.1)", border: "1px solid rgba(232,197,71,.15)", borderRadius: 8 }}>
           <div style={{ fontSize: 10, color: "#e8c547", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 5 }}>Active Project Rules</div>
-          {project.aiRules.map((r, i) => <div key={i} style={{ fontSize: 12, color: "#7a6000", marginBottom: 2 }}>• {r}</div>)}
+          {project.aiRules.map((r, i) => <div key={i} style={{ fontSize: 12, color: "#b95000", marginBottom: 2 }}>• {r}</div>)}
         </div>
       )}
 
@@ -4137,7 +4137,7 @@ Rules:
                   { label: "Sessions logged", value: (project.sessions || []).length, color: "#0052cc" },
                   { label: "Backbone stages", value: (project.backbone || []).length, color: "#5b21b6" },
                   { label: "MVP features", value: mvpFeatures.length, color: "#036b52" },
-                  { label: "Session outputs", value: sessionOutputs.length, color: "#7a6000" },
+                  { label: "Session outputs", value: sessionOutputs.length, color: "#b95000" },
                   { label: "NFRs documented", value: (project.nfrs || []).length, color: "#c9372c" },
                   { label: "Integrations mapped", value: (project.integrations || []).length, color: "#1868db" },
                 ].map(({ label, value, color }) => (
@@ -4148,11 +4148,11 @@ Rules:
                 ))}
               </div>
 
-              <div style={{ background: "#fff8e1", border: "1px solid #f5c518", borderRadius: 8, padding: "14px 16px", marginBottom: 20 }}>
-                <div style={{ fontSize: 11, fontWeight: 700, color: "#7a6000", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 8 }}>What Claude will generate</div>
+              <div style={{ background: "#fff0e6", border: "1px solid #e87c00", borderRadius: 8, padding: "14px 16px", marginBottom: 20 }}>
+                <div style={{ fontSize: 11, fontWeight: 700, color: "#b95000", fontFamily: "'DM Mono',monospace", textTransform: "uppercase", letterSpacing: ".06em", marginBottom: 8 }}>What Claude will generate</div>
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
                   {["Epics from backbone", "Stories with AC", "Personas from sessions", "Stakeholders from sessions", "Design tasks per flow", "AI rules from architecture"].map(item => (
-                    <span key={item} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#172b4d", background: "white", border: "1px solid #f5c518", borderRadius: 20, padding: "3px 10px" }}>
+                    <span key={item} style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 12, color: "#172b4d", background: "white", border: "1px solid #e87c00", borderRadius: 20, padding: "3px 10px" }}>
                       <CheckCircle2 size={11} color="#36b37e" /> {item}
                     </span>
                   ))}
@@ -4329,8 +4329,8 @@ function NewProjectModal({ onClose, onCreate }) {
               id: "discovery",
               label: "Discovery Project",
               desc: "You're figuring out what to build. Run sessions, map stories, estimate, and present to the client.",
-              icon: <Compass size={28} color="#7a6000" />,
-              border: "#ffe999", bg: "#fff8e1",
+              icon: <Compass size={28} color="#b95000" />,
+              border: "#ffd0b5", bg: "#fff0e6",
             },
           ].map(opt => (
             <button key={opt.id} onClick={() => setMode(opt.id)} style={{
@@ -4527,7 +4527,7 @@ function DiscoveryProjectModal({ onClose, onCreate, onBack }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
               {cur.options.map(opt => (
                 <button key={opt} onClick={() => setAnswers(a => ({ ...a, [cur.key]: opt }))}
-                  style={{ textAlign: "left", padding: "10px 14px", border: "2px solid " + (val === opt ? "#7a6000" : "#dfe1e6"), borderRadius: 8, background: val === opt ? "#fff8e1" : "#ffffff", cursor: "pointer", fontSize: 13, color: val === opt ? "#7a6000" : "#344563", fontFamily: "'DM Sans',sans-serif", fontWeight: val === opt ? 600 : 400 }}>
+                  style={{ textAlign: "left", padding: "10px 14px", border: "2px solid " + (val === opt ? "#b95000" : "#dfe1e6"), borderRadius: 8, background: val === opt ? "#fff0e6" : "#ffffff", cursor: "pointer", fontSize: 13, color: val === opt ? "#b95000" : "#344563", fontFamily: "'DM Sans',sans-serif", fontWeight: val === opt ? 600 : 400 }}>
                   {opt}
                 </button>
               ))}
@@ -4538,7 +4538,7 @@ function DiscoveryProjectModal({ onClose, onCreate, onBack }) {
               : <input value={val} onChange={e => setAnswers(a => ({ ...a, [cur.key]: e.target.value }))} placeholder={cur.placeholder} autoFocus onKeyDown={e => e.key === "Enter" && next()} />
           )}
           {step > 0 && (
-            <div style={{ marginTop: 20, padding: "10px 14px", background: "#fff8e1", borderRadius: 8, border: "1px solid #ffe999" }}>
+            <div style={{ marginTop: 20, padding: "10px 14px", background: "#fff0e6", borderRadius: 8, border: "1px solid #ffd0b5" }}>
               {questions.slice(0, step).filter(q => answers[q.key]).map((q, i) => (
                 <div key={i} style={{ display: "flex", gap: 8, fontSize: 11, marginBottom: 3 }}>
                   <span style={{ color: "#36b37e" }}>✓</span>
@@ -4586,7 +4586,7 @@ const DISCOVERY_TEMPLATE = {
 
 const MOSCOW_COLORS = {
   Must: { bg: "#ffebe6", color: "#bf2600", border: "#ffd5cc" },
-  Should: { bg: "#fff8e1", color: "#7a5c00", border: "#ffe999" },
+  Should: { bg: "#fff0e6", color: "#b95000", border: "#ffd0b5" },
   Could: { bg: "#e3fcef", color: "#00632b", border: "#abf5d1" },
   Won_t: { bg: "#f1f2f4", color: "#6b778c", border: "#dfe1e6" },
 };
@@ -4607,7 +4607,7 @@ function CopyBox({ label, content }) {
 }
 
 function PhaseTag({ phase }) {
-  const map = { discovery: { label: "Discovery", color: "#0052cc", bg: "#e6f0ff" }, "story-mapping": { label: "Story Mapping", color: "#5b21b6", bg: "#f3e6ff" }, planning: { label: "Planning", color: "#7a5c00", bg: "#fff8e1" }, complete: { label: "Complete", color: "#00632b", bg: "#e3fcef" } };
+  const map = { discovery: { label: "Discovery", color: "#0052cc", bg: "#e6f0ff" }, "story-mapping": { label: "Story Mapping", color: "#5b21b6", bg: "#f3e6ff" }, planning: { label: "Planning", color: "#b95000", bg: "#fff0e6" }, complete: { label: "Complete", color: "#00632b", bg: "#e3fcef" } };
   const t = map[phase] || map.discovery;
   return <span style={{ fontSize: 11, fontWeight: 600, color: t.color, background: t.bg, padding: "2px 8px", borderRadius: 4, fontFamily: "'DM Mono',monospace" }}>{t.label}</span>;
 }
@@ -4974,7 +4974,7 @@ Return ONLY valid JSON.`,
                 <span style={{ fontSize: 13, fontWeight: 600, color: "#172b4d" }}>{a.title}</span>
                 <span style={{ fontSize: 11, color: "#97a0af", marginLeft: 8 }}>{a.createdAt}</span>
                 {a.duration && <span style={{ fontSize: 10, color: "#0052cc", fontWeight: 600, background: "#e6f0ff", borderRadius: 4, padding: "1px 7px", marginLeft: 6, fontFamily: "'DM Mono',monospace" }}>{a.duration}min</span>}
-                {a.callType && <span style={{ fontSize: 10, color: a.callType === "internal" ? "#5b21b6" : "#7a5c00", fontWeight: 600, background: a.callType === "internal" ? "#f3e6ff" : "#fff8e1", borderRadius: 4, padding: "1px 7px", marginLeft: 4, fontFamily: "'DM Mono',monospace" }}>{a.callType === "internal" ? "INTERNAL" : "EXTERNAL"}</span>}
+                {a.callType && <span style={{ fontSize: 10, color: a.callType === "internal" ? "#5b21b6" : "#b95000", fontWeight: 600, background: a.callType === "internal" ? "#f3e6ff" : "#fff0e6", borderRadius: 4, padding: "1px 7px", marginLeft: 4, fontFamily: "'DM Mono',monospace" }}>{a.callType === "internal" ? "INTERNAL" : "EXTERNAL"}</span>}
                 {a.wrappedUp && <span style={{ fontSize: 10, color: "#36b37e", fontWeight: 700, background: "#e3fcef", borderRadius: 4, padding: "1px 7px", marginLeft: 4, fontFamily: "'DM Mono',monospace" }}>LOGGED</span>}
               </div>
             )}
@@ -5237,7 +5237,7 @@ function DiscoveryInsights({ project, update }) {
   const TABS = [
     { key: "risks", label: "Risks", singular: "Risk", color: "#de350b", bg: "#ffebe6", isObj: true },
     { key: "opportunities", label: "Opportunities", singular: "Opportunity", color: "#00875a", bg: "#e3fcef", isObj: true },
-    { key: "assumptions", label: "Assumptions", singular: "Assumption", color: "#7a5c00", bg: "#fff8e1", isObj: false },
+    { key: "assumptions", label: "Assumptions", singular: "Assumption", color: "#b95000", bg: "#fff0e6", isObj: false },
     { key: "flows", label: "Flows", singular: "Flow", color: "#0052cc", bg: "#e6f0ff", isObj: false },
   ];
 
@@ -5586,7 +5586,7 @@ function DiscoveryDocuments({ project, update }) {
           border: `2px dashed ${dragOver ? "#e8c547" : "#dfe1e6"}`,
           borderRadius: 10, padding: processing ? "28px 24px" : "32px 24px",
           textAlign: "center", cursor: processing ? "default" : "pointer",
-          background: dragOver ? "rgba(232,197,71,.06)" : "#fafbfc",
+          background: dragOver ? "rgba(244,136,0,.06)" : "#fafbfc",
           transition: "all .15s", marginBottom: 20,
         }}>
         {processing ? (
@@ -5649,7 +5649,7 @@ function DiscoveryDocuments({ project, update }) {
               <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                 {doc.risksAdded > 0 && <span style={{ fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono',monospace", padding: "1px 7px", borderRadius: 4, background: "#ffebe6", color: "#de350b" }}>{doc.risksAdded} risk{doc.risksAdded > 1 ? "s" : ""}</span>}
                 {doc.oppsAdded > 0 && <span style={{ fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono',monospace", padding: "1px 7px", borderRadius: 4, background: "#e3fcef", color: "#00632b" }}>{doc.oppsAdded} opp{doc.oppsAdded > 1 ? "s" : ""}</span>}
-                {doc.assumptionsAdded > 0 && <span style={{ fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono',monospace", padding: "1px 7px", borderRadius: 4, background: "#fff8e1", color: "#7a5c00" }}>{doc.assumptionsAdded} assumption{doc.assumptionsAdded > 1 ? "s" : ""}</span>}
+                {doc.assumptionsAdded > 0 && <span style={{ fontSize: 10, fontWeight: 700, fontFamily: "'DM Mono',monospace", padding: "1px 7px", borderRadius: 4, background: "#fff0e6", color: "#b95000" }}>{doc.assumptionsAdded} assumption{doc.assumptionsAdded > 1 ? "s" : ""}</span>}
               </div>
             </div>
             <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
@@ -5740,7 +5740,7 @@ function DiscoveryTodos({ project, update }) {
 
   const sourceColor = (src) => {
     if (!src || src === "manual") return { bg: "#f1f2f4", color: "#6b778c" };
-    if (src === "AI colleague") return { bg: "rgba(232,197,71,.15)", color: "#7a6000" };
+    if (src === "AI colleague") return { bg: "rgba(232,197,71,.15)", color: "#b95000" };
     return { bg: "#e6f0ff", color: "#0052cc" };
   };
 
@@ -6565,7 +6565,7 @@ function DiscoveryPlanning({ project, update }) {
             <Empty icon={<Lightbulb size={36} />} title="No spikes identified" sub="Spikes are open technical questions that need investigation before estimating" />
           ) : spikes.map((spike, i) => (
             <div key={i} className="card" style={{ display: "flex", gap: 12, alignItems: "center" }}>
-              <div style={{ width: 24, height: 24, borderRadius: "50%", background: "#fff8e1", border: "1px solid #ffe999", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#7a5c00", flexShrink: 0 }}>{i + 1}</div>
+              <div style={{ width: 24, height: 24, borderRadius: "50%", background: "#fff0e6", border: "1px solid #ffd0b5", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 11, fontWeight: 700, color: "#b95000", flexShrink: 0 }}>{i + 1}</div>
               <span style={{ fontSize: 13, color: "#344563", flex: 1 }}>{spike}</span>
             </div>
           ))}
@@ -7203,8 +7203,8 @@ function DiscoveryPresentation({ project, update, onGraduate }) {
       ))}
 
       {/* Graduate to delivery CTA */}
-      <div className="card" style={{ background: "rgba(232,197,71,.06)", border: "1px solid rgba(232,197,71,.3)", textAlign: "center", padding: "24px" }}>
-        <Rocket size={24} color="#7a6000" style={{ marginBottom: 10 }} />
+      <div className="card" style={{ background: "rgba(244,136,0,.06)", border: "1px solid rgba(232,197,71,.3)", textAlign: "center", padding: "24px" }}>
+        <Rocket size={24} color="#b95000" style={{ marginBottom: 10 }} />
         <div style={{ fontFamily: "'Syne',sans-serif", fontWeight: 700, fontSize: 16, color: "#172b4d", marginBottom: 6 }}>Discovery Complete?</div>
         <div style={{ fontSize: 13, color: "#6b778c", marginBottom: 16 }}>Move this project to Delivery mode to start creating stories, sprints, and tracking bugs.</div>
         <button className="btn btn-primary" onClick={onGraduate}><Rocket size={13} /> Move to Delivery</button>
