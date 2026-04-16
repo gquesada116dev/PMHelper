@@ -2346,16 +2346,17 @@ ${project.aiRules.length ? "Project rules: " + project.aiRules.join("; ") : ""}`
   const [editingTC, setEditingTC] = useState(null); // { idx, ...fields }
   const syncTool = detectTool(project.syncUrl);
 
-  const TC_STANDARD = `Standard: each test case must have:
-- code: TC-NNN (sequential within the story)
-- title: short scenario name (e.g. "Login with valid credentials")
-- type: "positive" | "negative" | "edge"
-- preconditions: what must be true before executing
-- steps: numbered list of exact actions
-- expected: the specific observable outcome
-Cover every AC scenario plus relevant edge cases and boundary conditions.`;
+  const TC_STANDARD = `Each test case must have exactly these three fields:
+- title: the Test Scenario — a short, specific name describing what is being tested (e.g. "Add task when list is empty", "Delete last item in list")
+- steps: numbered step-by-step actions the tester performs (e.g. "1. Navigate to...\n2. Click...\n3. Observe...")
+- expected: the Expected Result — the specific observable outcome that confirms the feature works correctly
 
-  const generateTestCasesFor = async (storyData) => {
+Also include:
+- code: TC-NNN (sequential)
+- type: "positive" | "negative" | "edge"
+- preconditions: any required setup state`;
+
+  const generateTestCasesFor = async (storyData, extraContext = "") => {
     if (!storyData.title) return [];
     const existing = (storyData.testCases || []).length;
     const reply = await askClaude([{
@@ -2366,23 +2367,32 @@ STORY: ${storyData.title}
 DESCRIPTION: ${storyData.description || ""}
 ACCEPTANCE CRITERIA:
 ${storyData.ac || "(no AC provided — infer from the story title and description)"}
+${extraContext ? `\nCONTEXT FOR REGRESSION THINKING:\n${extraContext}` : ""}
 
 ${TC_STANDARD}
+
+Think carefully about:
+1. HAPPY PATH — the main scenario working as expected
+2. EDGE CASES — boundary conditions, empty states, max/min values, special characters, concurrent actions
+3. NEGATIVE CASES — invalid inputs, missing required fields, unauthorized access, wrong order of operations
+4. REGRESSION — if this story modifies an existing feature (e.g. adds a new type, extends a list, changes a shared component), add test cases that verify the existing behaviour is NOT broken. For example: adding a new task type should not delete or duplicate existing task types; editing one item should not affect other items in the same list.
+
+Stay within scope — only test what this story is responsible for.
 
 Return JSON array only:
 [
   {
     "code": "TC-001",
-    "title": "...",
+    "title": "Test Scenario title",
     "type": "positive",
     "preconditions": "...",
     "steps": "1. ...\n2. ...\n3. ...",
-    "expected": "..."
+    "expected": "Expected Result description"
   }
 ]
 
-Generate ${existing > 0 ? "additional" : "comprehensive"} test cases covering all scenarios. Return only the JSON array.`
-    }], "You are a senior QA engineer. Generate structured test cases. Return only a valid JSON array.", 2000);
+Generate ${existing > 0 ? "additional" : "comprehensive"} test cases. Return only the JSON array.`
+    }], "You are a senior QA engineer. Generate structured test cases. Return only a valid JSON array.", 3000);
     const parsed = parseJSON(reply);
     if (!Array.isArray(parsed)) return [];
     return parsed.map((tc, i) => ({
@@ -2400,7 +2410,13 @@ Generate ${existing > 0 ? "additional" : "comprehensive"} test cases covering al
   const generateTestCases = async () => {
     if (!form.title) return;
     setGeneratingTCs(true);
-    const newCases = await generateTestCasesFor(form);
+    // Pass sibling stories for regression context
+    const siblings = (project.stories || []).filter(s => s.epicId === form.epicId && s.id !== form.id);
+    const epic = project.epics.find(e => e.id === form.epicId);
+    const regressionCtx = siblings.length > 0
+      ? `Epic: "${epic?.title || ""}"\nOther stories already built in this epic:\n${siblings.map(s => `- ${s.title}`).join("\n")}`
+      : "";
+    const newCases = await generateTestCasesFor(form, regressionCtx);
     setGeneratingTCs(false);
     if (newCases.length === 0) return;
     const merged = [...(form.testCases || []), ...newCases];
@@ -2627,7 +2643,12 @@ Generate ${existing > 0 ? "additional" : "comprehensive"} test cases covering al
                 setForm(improvedStory);
                 // Generate test cases from the improved story data
                 setGeneratingTCs(true);
-                const newCases = await generateTestCasesFor(improvedStory);
+                const sibls = (project.stories || []).filter(x => x.epicId === improvedStory.epicId && x.id !== improvedStory.id);
+                const ep = project.epics.find(e => e.id === improvedStory.epicId);
+                const regCtx = sibls.length > 0
+                  ? `Epic: "${ep?.title || ""}"\nOther stories already built in this epic:\n${sibls.map(x => `- ${x.title}`).join("\n")}`
+                  : "";
+                const newCases = await generateTestCasesFor(improvedStory, regCtx);
                 setGeneratingTCs(false);
                 if (newCases.length > 0) {
                   const merged = [...(improvedStory.testCases || []), ...newCases];
